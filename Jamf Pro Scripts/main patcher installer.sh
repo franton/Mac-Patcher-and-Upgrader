@@ -43,6 +43,7 @@ blockingapps=( "Microsoft PowerPoint" "Keynote" "zoom.us" )
 waitroom="/Library/Application Support/JAMF/Waiting Room"
 workfolder="/usr/local/corp"
 infofolder="$workfolder/cachedapps"
+imgfolder="$workfolder/imgs"
 jsspkginfo="/private/tmp/jsspkginfo.tsv"
 updatefilename="appupdates.plist"
 updatefile="$infofolder/$updatefilename"
@@ -57,6 +58,7 @@ pb="$pbapp/Contents/MacOS/Progress"
 
 installiconpath="/System/Library/CoreServices/Installer.app/Contents/Resources"
 updateicon="/System/Library/PreferencePanes/SoftwareUpdate.prefPane/Contents/Resources/SoftwareUpdate.icns"
+lockimage="$imgfolder/corplogo.png"
 
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
@@ -227,7 +229,7 @@ done
 
 # lock screen icon stuff here
 /bin/rm /private/tmp/LockScreen.app/Contents/Resources/Lock.jpg
-/bin/cp /usr/local/trr/imgs/trr-login-logo.png /private/tmp/LockScreen.app/Contents/Resources/Lock.jpg
+/bin/cp "$lockimage" /private/tmp/LockScreen.app/Contents/Resources/Lock.jpg
 
 # Progress.app seems to only like running with current user as owner.
 # We must "fix" every time we run.
