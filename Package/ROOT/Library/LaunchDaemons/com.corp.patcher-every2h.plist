@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.corp.patcher-every2h</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/jamf</string>
+		<string>policy</string>
+		<string>-event</string>
+		<string>apppatch</string>
+		<string>-randomDelaySeconds</string>
+		<string>300</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>7200</integer>
+	<key>UserName</key>
+	<string>root</string>
+</dict>
+</plist>
