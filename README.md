@@ -18,6 +18,20 @@ macOS upgrade 37% completed. Please wait.
 * Local record of deferments used, last update time and last number of deferrments used for that update.
 This is readable via standard defaults read commands in the supplied extension attributes.
 
+### Video Examples
+
+Example User Dialogs
+Shows time outs, deferrments and eventual force patching.
+
+https://user-images.githubusercontent.com/5807892/118586786-38043a80-b750-11eb-8dd6-540ffea0e857.mp4
+
+
+Patching Dialog (sped up)
+Shows screen lock out, application updating and macOS upgrading.
+
+https://user-images.githubusercontent.com/5807892/118586556-d512a380-b74f-11eb-8411-cb52f067da86.mp4
+
+
 Requirements
 ------------
 * macOS 10.15 and above
