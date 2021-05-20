@@ -2,13 +2,17 @@
 
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint
-# richard@richard-purves.com - 05-14-2021 - v1.0
+# Can also be run as a Jamf Self Service policy too. See parameter 4.
+# richard@richard-purves.com - 05-19-2021 - v1.3
 
 # Logging output to a file for testing
 #time=$( date "+%d%m%y-%H%M" )
 #set -x
 #logfile=/Users/Shared/cachedappinstaller-"$time".log
 #exec > $logfile 2>&1
+
+# Check to see if the Self Service switch has been used
+selfservice="$4"
 
 # Set user display messages here
 msgtitlenewsoft="New Software Available"
@@ -44,6 +48,7 @@ waitroom="/Library/Application Support/JAMF/Waiting Room"
 workfolder="/usr/local/corp"
 infofolder="$workfolder/cachedapps"
 imgfolder="$workfolder/imgs"
+installoutput="/private/tmp/installout.txt"
 jsspkginfo="/private/tmp/jsspkginfo.tsv"
 updatefilename="appupdates.plist"
 updatefile="$infofolder/$updatefilename"
@@ -58,7 +63,7 @@ pb="$pbapp/Contents/MacOS/Progress"
 
 installiconpath="/System/Library/CoreServices/Installer.app/Contents/Resources"
 updateicon="/System/Library/PreferencePanes/SoftwareUpdate.prefPane/Contents/Resources/SoftwareUpdate.icns"
-lockimage="$imgfolder/corplogo.png"
+lockimage="$imgfolder/corp-logo.png"
 
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
@@ -178,7 +183,7 @@ then
 		# Increment counter and store.
 		deferred=$(( deferred + 1 ))
 		/usr/bin/defaults write "$updatefile" deferral -int "$deferred"
-		
+
 		# Notify user how many deferrals are left and exit.
 		"$os" -e 'display dialog "You have used '"$deferred"' of '"$alloweddeferral"' allowed upgrade deferrals." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
 		exit 0
@@ -247,12 +252,12 @@ done
 # Find all applications with osascript and process them into an array.
 runningapps=($( /usr/bin/sudo -u "$currentuser" "$os" -e "tell application \"System Events\" to return displayed name of every application process whose (background only is false and displayed name is not \"Finder\")" | /usr/bin/sed 's/, /\n/g' ))
 
-# Process the new array of apps and gently kill them off one by one.
+# Process the new array of apps and gently kill them off one by one.
 # We'll use Lachlan (loceee) Stewart's technique of applescript run as the current user.
 # Obviously we don't want to kill off either LockScreen or jamfHelper!
 for app ($runningapps)
 do
-	[[ "$app" =~ ^(LockScreen|Progress|Terminal)$ ]] && continue
+	[[ "$app" =~ ^(LockScreen|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
 	/usr/bin/sudo -u "$currentuser" "$os" -e "ignoring application responses" -e "tell application \"$app\" to quit" -e "end ignoring"
 done
 
@@ -265,9 +270,7 @@ done
 # Store total number of applications to install
 # Displayed to user later during progress bar
 appcounter=0
-percent=1
 totalappnumber=${#cachedpkg[@]}
-percentapps=$(( 100 / $totalappnumber ))
 
 # Invoke our progress bar application.
 # Set initial message and then run the app as a background app.
@@ -281,11 +284,13 @@ cat <<EOF > "$pbjson"
 EOF
 
 $pb $pbjson $canceljson &
-sleep 1
 
 # Read the tsv line by line and install
 while read line
 do
+	# Increment the app counter
+	appcounter=$(( appcounter + 1 ))
+
 	# Batch process the line we just read out into its component parts
 	pkgname=$( echo "$line" | cut -f2 )
 	displayname=$( echo "$line" | cut -f3 )
@@ -297,67 +302,72 @@ do
 
 	# Does this or any other installer require a restart.
 	# Mark it so with an empty file. Warn the user.
-	if [ "$reboot" = "1" ];
+	if [[ "$reboot" == "1" ]];
 	then
 		touch /private/tmp/.apppatchreboot
 		"$os" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
 	fi
 
 	# Have the Jamf FEU/FUT options been set for this package
-	[ "$feu" = "1" ] && installoption="$installoption -feu"
-	[ "$fut" = "1" ] && installoption="$installoption -fut"
+	[[ "$feu" == "1" ]] && installoption="$installoption -feu"
+	[[ "$fut" == "1" ]] && installoption="$installoption -fut"
 
 	# Is this an OS install. Break out of the loop. Handle this separately.
-	[ "$osinstall" = "1" ] && continue
+	[[ "$osinstall" == "1" ]] && continue
 
-	# Did someone try to hit the cancel button? Kill the generated file and restart the progress bar.
-	# They had a chance to defer earlier.
-	[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
+	# Perform the installation as a background task with the correct options
+	# Output progress to a text file. We'll use that next.
+	$jb install $installoption -package $pkgname -path $fullpath -target / -showProgress > "$installoutput" &
 
-	# Work out total percent done, bit of a fudge for when we get close to 100% done
-	# Increment app counter. Means first display goes 0 to 1 which is good.
-	percent=$(( percent + percentapps ))
-	[ "$percent" -ge 90 ] && percent="99"
-	appcounter=$(( appcounter + 1 ))
+	while :;
+	do
+		# Wait three seconds for Progress to update, then work out current percentage.
+		# We make sure the percentage never hits 100 or the progress bar will stop.
+		sleep 3
 
-	# Update progress bar we started earlier and wait 3 seconds
-	# Only thing we have to do is rewrite the .json file it's looking at.
-	# And wait three seconds.
-	/bin/cat <<EOF > $pbjson
+		# Did someone try to hit the cancel button? Kill the generated file and restart the progress bar.
+		# They had a chance to defer earlier.
+		[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
+
+		percent=$( /bin/cat "$installoutput" | /usr/bin/grep "installer:%" | /usr/bin/cut -d"%" -f2 | /usr/bin/awk '{ print int($1) }' | /usr/bin/tail -n1 )
+		[ "$percent" -eq 100 ] && percent="99"
+
+		# Correct the file that Progress is using to display the bar.
+cat <<EOF > "$pbjson"
 {
-    "percentage": $percent,
-    "title": "Installing $displayname",
-    "message": "Installing application $appcounter of $totalappnumber",
-    "icon": "$updateicon"
+	"percentage": $percent,
+	"title": "Installing $displayname",
+	"message": "Install $percent% completed - (Updating $appcounter of $totalappnumber)",
+	"icon": "$updateicon"
 }
 EOF
 
-	sleep 1
-
-	# Perform the installation with the correct options
-	$jb install $installoption -package $pkgname -path $fullpath -target /
+		# Check to see if we've had a finished install. Break out the loop if so.
+		complete=$( /usr/bin/tail -n1 "$installoutput" | /usr/bin/grep -c -E "Successfully installed|The install failed" )
+		[ "$complete" = "1" ] && { /bin/rm -f "$installoutput"; break; }
+	done
 
 	# Clean up of variables before next loop or end of loop
-	unset priority pkgname displayname fullpath reboot feu fut osinstall
+	unset priority pkgname displayname fullpath reboot feu fut
 
 done < "$jsspkginfo"
 
 # Finally end the progress bar
-if [ "$osinstall" = "0" ];
+if [[ "$osinstall" == "0" ]];
 then
-cat <<EOF > $pbjson
+cat <<EOF > "$pbjson"
 {
-    "percentage": 100,
-    "title": "$msgprogresstitle",
-    "message": "Application Updates Completed",
-    "icon": "$updateicon"
+	"percentage": 100,
+	"title": "$msgprogresstitle",
+	"message": "Application Updates Completed",
+	"icon": "$updateicon"
 }
 EOF
 fi
 
 # Remove the progress bar. LockScreen if arm64. Intel is ok.
 /usr/bin/killall Progress 2>/dev/null
-[ $( /usr/bin/arch ) = "arm64" ] && /usr/bin/killall LockScreen 2>/dev/null
+[[ $( /usr/bin/arch ) = "arm64" ]] && /usr/bin/killall LockScreen 2>/dev/null
 
 ############################
 #
@@ -365,14 +375,14 @@ fi
 #
 ############################
 
-if [ "$osinstall" = "1" ];
+if [[ "$osinstall" == "1" ]];
 then
 	# Work out where startosinstaller binary is located
 	# Most of this work should be done already from the cached file info.
 	startos=$( /usr/bin/find "$fullpath" -iname "startosinstall" -type f )
 
 	# Set up a future interminate progress bar here. We'll invoke this later.
-cat <<EOF > $pbjson
+cat <<EOF > "$pbjson"
 {
     "percentage": -1,
     "title": "$msgosupgtitle",
@@ -387,7 +397,7 @@ EOF
 	# Create a post install script and launchd for use after the OS upgrade.
 	# This is why we don't need to run a recon immediately after the script runs. We do it later.
 
-cat << "EOF" > "$workfolder"/finishOSInstall.sh
+cat << "EOF" > /usr/local/corp/finishOSInstall.sh
 #!/bin/zsh
 
 # First Run Script after an OS upgrade.
@@ -417,11 +427,10 @@ done
 exit 0
 EOF
 
-	/usr/sbin/chown root:admin "$workfolder"/finishOSInstall.sh
-	/bin/chmod 755 "$workfolder"/finishOSInstall.sh
+	/usr/sbin/chown root:admin /usr/local/corp/finishOSInstall.sh
+	/bin/chmod 755 /usr/local/corp/finishOSInstall.sh
 
 	# Create a LaunchDaemon to run the above script
-
 cat << "EOF" > /Library/LaunchDaemons/com.corp.cleanupOSInstall.plist
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -445,7 +454,7 @@ EOF
 	/bin/chmod 644 /Library/LaunchDaemons/com.corp.cleanupOSInstall.plist
 
 	# Are we running on Intel or Arm based macs? Apple Silicon macs require user credentials.
-	if [[ $( /usr/bin/arch ) = "arm64" ]];
+	if [[ $( /usr/bin/arch ) == "arm64" ]];
 	then
 		# Apple Silicon macs. We need to prompt for the users credentials or this won't work.
 
@@ -464,7 +473,7 @@ EOF
 			# Prompt for a password. Verify it works a maximum of three times before quitting out.
 			# Also have timeout on the prompt so it doesn't just sit there.
 			password=$( "$os" -e 'display dialog "Please enter your macOS login password:" default answer "" with title "macOS Update - Authentication Required" giving up after 300 with text buttons {"OK"} default button 1 with hidden answer with icon file "'"$iconposix"'" ' -e 'return text returned of result' '' )
-	
+
 			# Escape any spaces in the password
 			escapepassword=$( echo ${password} | /usr/bin/python -c "import re, sys; print(re.escape(sys.stdin.read().strip()))" )
 
@@ -528,12 +537,14 @@ EOF
 	fi
 
 	# Code to stop people cancelling the update window. Also will not proceed until startosinstall is complete.
-	sleep 2
 	while :;
 	do
+		# Wait two seconds per loop. That'll give Progress a chance to catch up as it only updates once per second.
+		sleep 2
+
 		# Stops the user cancelling the progress bar by force reloading it.
 		[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
-		
+
 		# This was such a pain to work out. We have to cat the entire file out,
 		# then use grep to find the particular line we want but this is also a trap.
 		# Apple's startosinstall is using ^M characters to backspace and overwrite the percentage line in Terminal.
@@ -541,33 +552,34 @@ EOF
 		# So change all those to unix linefeeds with tr, grab the latest (last) line and ...
 		# finally awk to convert to a suitable integer for use with Progress.
 		percent=$( /bin/cat /private/tmp/nohup.log | /usr/bin/grep "Preparing: " | /usr/bin/tr '\r' '\n' | /usr/bin/tail -n1 | /usr/bin/awk '{ print int($2) }' )
-		
+
 		# Trap edge cases of numbers being 0, which won't display or 100 which stops the progress bar.
 		[ "$percent" -eq 0 ] && percent="1"
 		[ "$percent" -ge 99 ] && percent="99"
-		
+
 		# Unless we get the restart message, then we should cancel the bar by setting it to 100 then breaking out of the loop.
 		test=$( /bin/cat /private/tmp/nohup.log | /usr/bin/tr '\r' '\n' | /usr/bin/grep -c "Waiting to restart" )
 		[ "$test" = "1" ] && percent="100"
-cat <<EOF > $pbjson
+cat <<EOF > "$pbjson"
 {
-    "percentage": $percent,
-    "title": "$msgosupgtitle",
-    "message": "macOS upgrade $percent% completed. Please wait.",
-    "icon": "$updateicon"
+	"percentage": $percent,
+	"title": "$msgosupgtitle",
+	"message": "macOS upgrade $percent% completed. Please wait.",
+	"icon": "$updateicon"
 }
 EOF
-		[ "$test" = "1" ] && { sleep 3; break; }
+		# If we detected the restart message, break out the loop here.
+		[[ "$test" == "1" ]] && { sleep 3; break; }
 	done
 fi
 
 # Run a jamf recon here so we don't overdo it by having it run every policy, only on success.
 # Unless we're doing an OS install, we have other ways for that above.
-[ "$osinstall" = "0" ] && $jb recon
+[[ "$osinstall" == "0" ]] && /usr/bin/nohup $jb recon > /private/tmp/nohup.log &
 
 # Was a reboot requested? We should oblige IF we're not doing an OS upgrade
 # Give it a 1 minute delay to allow for policy reporting to finish
-if [ "$osinstall" = "0" ];
+if [[ "$osinstall" == "0" ]];
 then
 	[ -f "/private/tmp/.apppatchreboot" ] && { /bin/rm /private/tmp/.apppatchreboot; /sbin/shutdown -r +1; }
 fi
@@ -584,5 +596,5 @@ fi
 # Reset IFS
 IFS=$OIFS
 
-# All done.
+# All done
 exit 0
