@@ -10,8 +10,8 @@ This is a series of scripts and a deployment pkg to plug into your Jamf Pro syst
 * Will update installed applications.
 * If available, will upgrade the installed OS.
 * Accurate progress bar information such as:
-Install 23% completed - (Updating 2 of 5)
-macOS upgrade 37% completed. Please wait.
+* * Install 23% completed - (Updating 2 of 5)
+* * macOS upgrade 37% completed. Please wait.
 * Default behavior is to NOT restart, but enabling that option on a pkg in Jamf will ensure particular upgrade(s) restarts the mac.
 * Supports both Intel and Apple Silicon macs and all their little foibles.
 * Uses familiar Jamf Pro constructs such as triggers, smart groups and policies.
@@ -76,13 +76,10 @@ Jamf Pro Smart Groups
 
 You will need one of these per application. In this example, I'll be using CyberDuck.
 
-**Name:** Update Cyberduck 7.9.0
-
-**Criteria 1:** "Application Title" "is" "Cyberduck.app" 
-
-**Criteria 2:** "and" "Application Version" "is not" "7.9.0"
-
-**Criteria 3:** "and" "Cached Packages" "does not have" "Cyberduck-7.9.0.pkg"
+* **Name:** Update Cyberduck 7.9.0
+* **Criteria 1:** "Application Title" "is" "Cyberduck.app" 
+* **Criteria 2:** "and" "Application Version" "is not" "7.9.0"
+* **Criteria 3:** "and" "Cached Packages" "does not have" "Cyberduck-7.9.0.pkg"
 
 What this does is to see if CyberDuck is installed, check the installed version and to then see if we've already cached an upgrade installer. That way we don't run unnecessarily.
 
@@ -92,11 +89,9 @@ Every time you update an application in Jamf, the appropriate group **must** be 
 
 This is a special case and is not formatted like the other groups. For this example, macOS 11.3.1 is the latest version being offered.
 
-**Name:** Update macOS Installer
-
-**Criteria 1:** "Operating System Version" "less than" "11.3.1"
-
-**Criteria 2:** "Application Title" "does not have" "Install macOS Big Sur.app"
+* **Name:** Update macOS Installer
+* **Criteria 1:** "Operating System Version" "less than" "11.3.1"
+* **Criteria 2:** "Application Title" "does not have" "Install macOS Big Sur.app"
 
 Jamf Pro Scripts
 ----------------
@@ -105,17 +100,12 @@ Jamf Pro Scripts
 
 This requires the simplest policy of all, as it's called every two hours by the LaunchDaemon in the deployment pkg.
 
-**Name:** Run Patcher
-
-**Trigger:** Custom
-
-**Trigger event:** apppatch
-
-**Execution Frequency:** ongoing
-
-**Scripts:** Set this to run the main patcher installer script
-
-**Maintenance:** Enable Update Inventory
+* **Name:** Run Patcher
+* **Trigger:** Custom
+* **Trigger event:** apppatch
+* **Execution Frequency:** ongoing
+* **Scripts:** Set this to run the main patcher installer script
+* **Maintenance:** Enable Update Inventory
 
 This is the script that does all the user prompting, displays the progress bars and performs clean up.
 
@@ -125,17 +115,12 @@ This is the script that does all the user prompting, displays the progress bars 
 
 Once again, we'll use Cyberduck as an example but you'll have to create this per application.
 
-**Name:** Cache Cyberduck
-
-**Trigger:** Recurring Check-in
-
-**Execution Frequency:** ongoing
-
-**Packages:** Set this to **cache** Cyberduck-7.9.0.pkg
-
-**Scripts:** Set this to run the cached pkg processor script
-
-**Maintenance:** Enable Update Inventory
+* **Name:** Cache Cyberduck
+* **Trigger:** Recurring Check-in
+* **Execution Frequency:** ongoing
+* **Packages:** Set this to **cache** Cyberduck-7.9.0.pkg
+* **Scripts:** Set this to run the cached pkg processor script
+* **Maintenance:** Enable Update Inventory
 
 Scope any policies using this to the appropriate smart group for that application you created earlier.
 
@@ -143,17 +128,12 @@ Scope any policies using this to the appropriate smart group for that applicatio
 
 This again is a special case because the script is using softwareupdate to download the Install macOS app bundle directly to the Applications folder. As a result the policy is different to caching an application installer.
 
-**Name:** Cache Cyberduck
-
-**Trigger:** Recurring Check-in
-
-**Execution Frequency:** ongoing
-
-**Scripts:** Run the download macos installer script as "Before".
-
-**Scripts:** Set this to run the cached pkg processor script as "After" and setting script parameter 4 to "yes"
-
-**Maintenance:** Enable Update Inventory
+* **Name:** Cache Cyberduck
+* **Trigger:** Recurring Check-in
+* **Execution Frequency:** ongoing
+* **Scripts:** Run the download macos installer script as "Before".
+* **Scripts:** Set this to run the cached pkg processor script as "After" and setting script parameter 4 to "yes"
+* **Maintenance:** Enable Update Inventory
 
 Scope this policy to the macOS update group from earlier.
 
