@@ -68,6 +68,8 @@ lockimage="$imgfolder/corp-logo.png"
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
 
+tilesize=$( /usr/bin/sudo -u "$currentuser" /usr/bin/defaults read com.apple.dock tilesize )
+
 # Check that the info folder exists, create if missing and set appropriate permissions
 /bin/mkdir -p "$infofolder"
 /bin/chmod 755 "$infofolder"
@@ -239,6 +241,10 @@ done
 # Progress.app seems to only like running with current user as owner.
 # We must "fix" every time we run.
 /usr/sbin/chown -R "$currentuser":staff "$pbapp"
+
+# Hide the Dock temporarily. We'll set it back later.
+/usr/bin/sudo -u "$currentuser" /usr/bin/defaults write com.apple.dock tilesize -int 1
+/usr/bin/killall Dock 2>/dev/null
 
 # Activate the LockScreen and background so we don't get stuck
 /private/tmp/LockScreen.app/Contents/MacOS/LockScreen &
@@ -511,6 +517,8 @@ EOF
 			"$os" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
 
 			# Quit the screenlock, caffeinate and clean up.
+			/usr/bin/sudo -u "$currentuser" /usr/bin/defaults write com.apple.dock tilesize -int $tilesize
+			/usr/bin/killall Dock 2>/dev/null
 			/usr/bin/killall caffeinate 2>/dev/null
 			/bin/rm -R "$fullpath/$pkgfilename"
 			/bin/rm -rf /private/tmp/LockScreen.app
@@ -584,7 +592,9 @@ then
 	[ -f "/private/tmp/.apppatchreboot" ] && { /bin/rm /private/tmp/.apppatchreboot; /sbin/shutdown -r +1; }
 fi
 
-# Kill the lockscreen and clean up files
+# Reset user Dock back to where it was. Kill the lockscreen and clean up files
+/usr/bin/sudo -u "$currentuser" /usr/bin/defaults write com.apple.dock tilesize -int $tilesize
+/usr/bin/killall Dock 2>/dev/null
 /usr/bin/killall LockScreen 2>/dev/null
 /usr/bin/killall Progress 2>/dev/null
 /usr/bin/killall caffeinate 2>/dev/null
