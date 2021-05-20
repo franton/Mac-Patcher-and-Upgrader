@@ -10,7 +10,7 @@ This is a series of scripts and a deployment pkg to plug into your Jamf Pro syst
 * Will update installed applications.
 * If available, will upgrade the installed OS.
 * Accurate progress bar information such as:
-Installing application Cyberduck (1 of 5)
+Install 23% completed - (Updating 2 of 5)
 macOS upgrade 37% completed. Please wait.
 * Default behavior is to NOT restart, but enabling that option on a pkg in Jamf will ensure particular upgrade(s) restarts the mac.
 * Supports both Intel and Apple Silicon macs and all their little foibles.
@@ -28,6 +28,8 @@ https://user-images.githubusercontent.com/5807892/118586786-38043a80-b750-11eb-8
 
 Patching Dialog (sped up)
 Shows screen lock out, application updating and macOS upgrading.
+
+Please note this is from an older version and there's more accurate progress bar on Application upgrades now!
 
 https://user-images.githubusercontent.com/5807892/118586556-d512a380-b74f-11eb-8411-cb52f067da86.mp4
 
@@ -47,8 +49,11 @@ This ensures the app processing script will function. You will get an error if i
 2) Download the latest swift-progress release from the link above.
 3) Make a signed deployment pkg with the files and folders in the "Package" folder.
 4) Check then upload that pkg to your Jamf Pro instance. You will deploy this via existing mechanisms and/or deploy processes to your fleet.
-5) Upload the main scripts to your Jamf Pro instance.
-6) The cached pkg processor script can utilise the parameter four value. Call this "OS Installer (blank for no)"
+5) Implement the Extension Attributes to aid in your reporting and audits.
+6) Implement the provided Configuration Profile so that PPPC will not interfere with this script. (Customise for your own corporate overlords!)
+7) Upload the main scripts to your Jamf Pro instance.
+8) The cached pkg processor script can utilise the parameter four value. Call this "OS Installer (blank for no)".
+9) The main patcher installer script can also utilise parameter four for Self Service runs. Call this "Self Service policy (blank for no)".
 
 API User Required
 -----------------
@@ -113,6 +118,8 @@ This requires the simplest policy of all, as it's called every two hours by the 
 **Maintenance:** Enable Update Inventory
 
 This is the script that does all the user prompting, displays the progress bars and performs clean up.
+
+(OPTIONAL) Duplicate this policy, make it a Self Service policy and ensure parameter 4 is set to yes. That will provide a better user experience for manual updating.
 
 ##### cached pkg processor.sh
 
