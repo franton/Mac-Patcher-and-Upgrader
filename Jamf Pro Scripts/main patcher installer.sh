@@ -3,7 +3,7 @@
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint
 # Can also be run as a Jamf Self Service policy too. See parameter 4.
-# richard@richard-purves.com - 05-19-2021 - v1.3
+# richard@richard-purves.com - 05-20-2021 - v1.5
 
 # Logging output to a file for testing
 #time=$( date "+%d%m%y-%H%M" )
@@ -67,6 +67,7 @@ lockimage="$imgfolder/corp-logo.png"
 
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
+bootvolname=$( /usr/sbin/diskutil info / | /usr/bin/awk '/Volume Name:/ { print substr($0, index($0,$3)) ; }' )
 
 tilesize=$( /usr/bin/sudo -u "$currentuser" /usr/bin/defaults read com.apple.dock tilesize )
 
@@ -92,8 +93,8 @@ then
 	exit 0
 fi
 
-# Blocking application check here
-foregroundapp=($( /usr/bin/sudo -u "$currentuser" "$os" -e "tell application \"System Events\"" -e "return name of first application process whose frontmost is true" -e "end tell" 2> /dev/null))
+# Blocking application check here. Find the foreground app with lsappinfo
+foregroundapp=$( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 "(in front)" | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' )
 
 # check for blocking apps
 for app ($blockingapps)
@@ -162,7 +163,8 @@ deferred=$( /usr/bin/defaults read "$updatefile" deferral )
 # Work out icon path for osascript. It likes paths in the old : separated format
 [ -f "$installiconpath/Installer.icns" ] && icon="$installiconpath/Installer.icns"
 [ -f "$installiconpath/AppIcon.icns" ] && icon="$installiconpath/AppIcon.icns"
-iconposix=$( "$os" -e 'tell application "System Events" to return POSIX file "'"$icon"'" as text' )
+iconposix=$( echo $icon | /usr/bin/sed 's/\//:/g' )
+iconposix="$bootvolname$icon"
 
 # Prepare list of apps to install in readable format
 # Remove trailing blank lines to avoid parsing issues
@@ -256,15 +258,15 @@ done
 ################################
 
 # Find all applications with osascript and process them into an array.
-runningapps=($( /usr/bin/sudo -u "$currentuser" "$os" -e "tell application \"System Events\" to return displayed name of every application process whose (background only is false and displayed name is not \"Finder\")" | /usr/bin/sed 's/, /\n/g' ))
+# Big thanks to William 'talkingmoose' Smith for this way of parsing lsappinfo
+runningapps=($( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 Foreground | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' ))
 
 # Process the new array of apps and gently kill them off one by one.
-# We'll use Lachlan (loceee) Stewart's technique of applescript run as the current user.
-# Obviously we don't want to kill off either LockScreen or jamfHelper!
+# Obviously we don't want to kill off Finder, LockScreen or Progress! Or a few others we don't routinely update.
 for app ($runningapps)
 do
-	[[ "$app" =~ ^(LockScreen|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
-	/usr/bin/sudo -u "$currentuser" "$os" -e "ignoring application responses" -e "tell application \"$app\" to quit" -e "end ignoring"
+	[[ "$app" =~ ^(Finder|LockScreen|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
+	/usr/bin/pkill "$app"
 done
 
 ######################################
@@ -466,7 +468,8 @@ EOF
 
 		# Work out appropriate icon for use
 		icon="/System/Applications/Utilities/Keychain Access.app/Contents/Resources/AppIcon.icns"
-		iconposix=$( "$os" -e 'tell application "System Events" to return POSIX file "'"$icon"'" as text' )
+		iconposix=$( echo $icon | /usr/bin/sed 's/\//:/g' )
+		iconposix="$bootvolname$icon"
 
 		# Warn user of what's about to happen
 		"$os" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
