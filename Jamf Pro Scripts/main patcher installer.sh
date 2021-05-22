@@ -3,7 +3,7 @@
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint
 # Can also be run as a Jamf Self Service policy too. See parameter 4.
-# richard@richard-purves.com - 05-19-2021 - v1.3
+# richard@richard-purves.com - 05-21-2021 - v1.5
 
 # Logging output to a file for testing
 #time=$( date "+%d%m%y-%H%M" )
@@ -26,7 +26,7 @@ msgnewsoftforced="Important software updates are available!
 You have run out of allowed install deferrals.
 
 The following software will be upgraded now:"
-msgrebootwarning="Your computer will need to reboot at the completion of the upgrades."
+msgrebootwarning="Your computer now needs to restart to complete the updates."
 msgpowerwarning="Your computer is about to upgrade installed software.
 
 Please ensure you are connected to AC Power.
@@ -63,12 +63,11 @@ pb="$pbapp/Contents/MacOS/Progress"
 
 installiconpath="/System/Library/CoreServices/Installer.app/Contents/Resources"
 updateicon="/System/Library/PreferencePanes/SoftwareUpdate.prefPane/Contents/Resources/SoftwareUpdate.icns"
-lockimage="$imgfolder/corp-logo.png"
+lockimage="$imgfolder/logo.png"
 
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
-
-tilesize=$( /usr/bin/sudo -u "$currentuser" /usr/bin/defaults read com.apple.dock tilesize )
+bootvolname=$( /usr/sbin/diskutil info / | /usr/bin/awk '/Volume Name:/ { print substr($0, index($0,$3)) ; }' )
 
 # Check that the info folder exists, create if missing and set appropriate permissions
 /bin/mkdir -p "$infofolder"
@@ -92,8 +91,8 @@ then
 	exit 0
 fi
 
-# Blocking application check here
-foregroundapp=($( /usr/bin/sudo -u "$currentuser" "$os" -e "tell application \"System Events\"" -e "return name of first application process whose frontmost is true" -e "end tell" 2> /dev/null))
+# Blocking application check here. Find the foreground app with lsappinfo
+foregroundapp=$( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 "(in front)" | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' )
 
 # check for blocking apps
 for app ($blockingapps)
@@ -162,7 +161,8 @@ deferred=$( /usr/bin/defaults read "$updatefile" deferral )
 # Work out icon path for osascript. It likes paths in the old : separated format
 [ -f "$installiconpath/Installer.icns" ] && icon="$installiconpath/Installer.icns"
 [ -f "$installiconpath/AppIcon.icns" ] && icon="$installiconpath/AppIcon.icns"
-iconposix=$( "$os" -e 'tell application "System Events" to return POSIX file "'"$icon"'" as text' )
+iconposix=$( echo $icon | /usr/bin/sed 's/\//:/g' )
+iconposix="$bootvolname$iconposix"
 
 # Prepare list of apps to install in readable format
 # Remove trailing blank lines to avoid parsing issues
@@ -242,10 +242,6 @@ done
 # We must "fix" every time we run.
 /usr/sbin/chown -R "$currentuser":staff "$pbapp"
 
-# Hide the Dock temporarily. We'll set it back later.
-/usr/bin/sudo -u "$currentuser" /usr/bin/defaults write com.apple.dock tilesize -int 1
-/usr/bin/killall Dock 2>/dev/null
-
 # Activate the LockScreen and background so we don't get stuck
 /private/tmp/LockScreen.app/Contents/MacOS/LockScreen &
 
@@ -256,15 +252,15 @@ done
 ################################
 
 # Find all applications with osascript and process them into an array.
-runningapps=($( /usr/bin/sudo -u "$currentuser" "$os" -e "tell application \"System Events\" to return displayed name of every application process whose (background only is false and displayed name is not \"Finder\")" | /usr/bin/sed 's/, /\n/g' ))
+# Big thanks to William 'talkingmoose' Smith for this way of parsing lsappinfo
+runningapps=($( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 Foreground | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' ))
 
 # Process the new array of apps and gently kill them off one by one.
-# We'll use Lachlan (loceee) Stewart's technique of applescript run as the current user.
-# Obviously we don't want to kill off either LockScreen or jamfHelper!
+# Obviously we don't want to kill off either LockScreen or jamfHelper! Or a few others we don't routinely update.
 for app ($runningapps)
 do
-	[[ "$app" =~ ^(LockScreen|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
-	/usr/bin/sudo -u "$currentuser" "$os" -e "ignoring application responses" -e "tell application \"$app\" to quit" -e "end ignoring"
+	[[ "$app" =~ ^(Finder|LockScreen|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
+	/usr/bin/pkill "$app"
 done
 
 ######################################
@@ -307,12 +303,8 @@ do
 	osinstall=$( echo "$line" | cut -f8 )
 
 	# Does this or any other installer require a restart.
-	# Mark it so with an empty file. Warn the user.
-	if [[ "$reboot" == "1" ]];
-	then
-		touch /private/tmp/.apppatchreboot
-		"$os" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
-	fi
+	# Mark it so with an empty file.
+	[[ "$reboot" == "1" ]] && touch /private/tmp/.apppatchreboot
 
 	# Have the Jamf FEU/FUT options been set for this package
 	[[ "$feu" == "1" ]] && installoption="$installoption -feu"
@@ -329,7 +321,7 @@ do
 	do
 		# Wait three seconds for Progress to update, then work out current percentage.
 		# We make sure the percentage never hits 100 or the progress bar will stop.
-		sleep 3
+		sleep 1
 
 		# Did someone try to hit the cancel button? Kill the generated file and restart the progress bar.
 		# They had a chance to defer earlier.
@@ -349,7 +341,7 @@ cat <<EOF > "$pbjson"
 EOF
 
 		# Check to see if we've had a finished install. Break out the loop if so.
-		complete=$( /usr/bin/tail -n1 "$installoutput" | /usr/bin/grep -c -E "Successfully installed|The install failed" )
+		complete=$( /bin/cat "$installoutput" | /usr/bin/grep -c -E "Successfully installed|failed" )
 		[ "$complete" = "1" ] && { /bin/rm -f "$installoutput"; break; }
 	done
 
@@ -370,6 +362,9 @@ cat <<EOF > "$pbjson"
 }
 EOF
 fi
+
+# Warn the user if any impending reboots
+[[ -f /private/tmp/.apppatchreboot ]] && "$os" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
 
 # Remove the progress bar. LockScreen if arm64. Intel is ok.
 /usr/bin/killall Progress 2>/dev/null
@@ -466,7 +461,8 @@ EOF
 
 		# Work out appropriate icon for use
 		icon="/System/Applications/Utilities/Keychain Access.app/Contents/Resources/AppIcon.icns"
-		iconposix=$( "$os" -e 'tell application "System Events" to return POSIX file "'"$icon"'" as text' )
+		iconposix=$( echo $icon | /usr/bin/sed 's/\//:/g' )
+		iconposix="$bootvolname$iconposix"
 
 		# Warn user of what's about to happen
 		"$os" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
@@ -517,7 +513,6 @@ EOF
 			"$os" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
 
 			# Quit the screenlock, caffeinate and clean up.
-			/usr/bin/sudo -u "$currentuser" /usr/bin/defaults write com.apple.dock tilesize -int $tilesize
 			/usr/bin/killall Dock 2>/dev/null
 			/usr/bin/killall caffeinate 2>/dev/null
 			/bin/rm -R "$fullpath/$pkgfilename"
@@ -547,8 +542,8 @@ EOF
 	# Code to stop people cancelling the update window. Also will not proceed until startosinstall is complete.
 	while :;
 	do
-		# Wait two seconds per loop. That'll give Progress a chance to catch up as it only updates once per second.
-		sleep 2
+		# Wait a second per loop. That'll give Progress a chance to catch up as it only updates once per second.
+		sleep 1
 
 		# Stops the user cancelling the progress bar by force reloading it.
 		[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
@@ -589,11 +584,14 @@ fi
 # Give it a 1 minute delay to allow for policy reporting to finish
 if [[ "$osinstall" == "0" ]];
 then
-	[ -f "/private/tmp/.apppatchreboot" ] && { /bin/rm /private/tmp/.apppatchreboot; /sbin/shutdown -r +1; }
+	if [ -f "/private/tmp/.apppatchreboot" ];
+	then
+		/bin/rm /private/tmp/.apppatchreboot
+		/sbin/shutdown -r +1 &
+	fi
 fi
 
-# Reset user Dock back to where it was. Kill the lockscreen and clean up files
-/usr/bin/sudo -u "$currentuser" /usr/bin/defaults write com.apple.dock tilesize -int $tilesize
+# Reset Dock back to normal. Kill the lockscreen and clean up files
 /usr/bin/killall Dock 2>/dev/null
 /usr/bin/killall LockScreen 2>/dev/null
 /usr/bin/killall Progress 2>/dev/null
