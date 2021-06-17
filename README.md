@@ -128,7 +128,7 @@ Scope any policies using this to the appropriate smart group for that applicatio
 
 This again is a special case because the script is using softwareupdate to download the Install macOS app bundle directly to the Applications folder. As a result the policy is different to caching an application installer.
 
-* **Name:** `Cache Cyberduck`
+* **Name:** `Cache macOS Installer`
 * **Trigger:** `Recurring Check-in`
 * **Execution Frequency:** `ongoing`
 * **Scripts:** `Run the download macos installer script as "Before"`
