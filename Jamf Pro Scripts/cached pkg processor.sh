@@ -2,11 +2,11 @@
 
 # Cached application pkg processor script
 # Meant to be run after an application installer is cached to the mac
-# richard@richard-purves.com - 05-11-2021 - v1.0
+# richard@richard-purves.com - 06-01-2021 - v1.1
 
 # Variables here
 waitroom="/Library/Application Support/JAMF/Waiting Room"
-infofolder="/usr/local/trr/cachedapps"
+infofolder="/usr/local/corp/cachedapps"
 apiusr=""
 apipwd=""
 jssurl=$( /usr/bin/defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url )
@@ -37,9 +37,12 @@ then
   # We also have to avoid any .pkg.cache.xml files as well. These contain info but it's not useful to us.
 
   # Find all the *.pkg or *.pkg.zip files in thw waiting room. Sort them by last modified date, old to new and then grab the last one.
-  cachedpkg=$( /usr/bin/find "$waitroom" -type f \( -iname \*.pkg -o -iname \*.pkg.zip \) -print0 |\
-               /usr/bin/xargs -0 ls -tr |\
-               /usr/bin/tail -n1 )
+  cachedpkg=$( find "$waitroom" -type f \( -iname \*.pkg -o -iname \*.pkg.zip \) -print0 |\
+               xargs -0 ls -tr |\
+               tail -n1 )
+
+  # Did we pick up a file? Fail here if not.
+  [[ -z "$cachedpkg" ]] && { echo "No package found."; exit 1; }
 
   # Strip off the full file path so we just have the name
   # Then remove the file extension from the name
@@ -67,12 +70,12 @@ then
   /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist CacheDate -date "$tdydate"
   /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist FEU -bool "$feu"
   /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist FUT -bool "$fut"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist OSInstaller -bool FALSE  
+  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist OSInstaller -bool FALSE
 
   # Look for any already cached pkgs and cache files. We already have a processed name from earlier.
   # Count number of dash characters in filename, then count number of spaces
-  dashes=$( echo "$displayname" | /usr/bin/awk -F\- '{print NF-1}' )
-  spaces=$( echo "$displayname" | /usr/bin/awk -F\  '{print NF-1}' )
+  dashes=$( echo "$displayname" | awk -F\- '{print NF-1}' )
+  spaces=$( echo "$displayname" | awk -F\  '{print NF-1}' )
 
   # Slice the name after the delimiter.
   # If we have dashes, process those otherwise move to spaces.
@@ -83,10 +86,10 @@ then
   # I wish there was something better than this but limited on our cli tools.
   if [ "$dashes" -gt "0" ];
   then
-      name=$( echo $displayname | /usr/bin/rev | /usr/bin/cut -d"-" -f2- | /usr/bin/rev )
+      name=$( echo $displayname | rev | cut -d"-" -f2- | rev )
   elif [ "$spaces" -gt "0" ];
   then
-      name=$( echo $pkgname | /usr/bin/rev | /usr/bin/cut -d" " -f2- | /usr/bin/rev )
+      name=$( echo $pkgname | rev | cut -d" " -f2- | rev )
   else
       echo "ERROR: Can't split filename. Can't detect duplicate names."
       exit 1
@@ -101,7 +104,7 @@ then
 else
 	# We are an OS installer. Special rules apply
 	/bin/echo "OS Installer specified"
-	
+
 	# First find the app installer
 	app=$( /usr/bin/find /Applications -iname "Install macOS*" -type d -maxdepth 1 )
 
@@ -110,7 +113,7 @@ else
 	then
 		# We did
 		echo "Installer found: $app"
-		
+
 		# Work out it's name and path
 		appname=$( /usr/bin/basename $app )
 		apppath=$( /usr/bin/dirname $app )

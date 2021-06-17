@@ -1,31 +1,40 @@
 #!/bin/zsh
 
 # Script to retrieve latest macOS installer
-# richard@richard-purves.com - 05-12-2021 - v1.0
+# richard@richard-purves.com - 06-15-2021 - v1.2
 
-# Stop IFS splitting on spaces in filenames
-OIFS=$IFS
-IFS=$'\n'
+# Any OS specified?
+downloados="$4"
+[ -z "$64" ] && { /bin/echo "No OS version specified. Defaulting to 11.4"; downloados="11.4"; }
+
+# Check if we're already running
+if [ -f "/private/tmp/.downloadmacos" ];
+then
+	# Work out last modified date on the touch file. Convert to epoch.
+    # If it's above 86400 it's been over a day. We can ignore.
+	currentdate=$( /bin/date -j -f "%a %b %d %T %Z %Y" "$( /bin/date )" "+%s" )
+	lastmodified=$( /usr/bin/stat -x /private/tmp/.downloadmacos | grep "Access: " | cut -d" " -f2- )
+    lastmodepoch=$( /bin/date -j -f "%a %b %d %T %Y" "$lastmodified" "+%s" )
+    diff="$((currentdate-lastmodepoch))"
+
+    [ "$diff" -ge 86400 ] && { echo "Download already in progress."; exit 0; }
+fi
+
+# Place a check file to stop this running multiple times
+[ ! -f "/private/tmp/.downloadmacos" ] && /usr/bin/touch /private/tmp/.downloadmacos
 
 # Find all macOS installers and place into an array
-apps=($( /usr/bin/find /Applications -iname "Install macOS*" -type d -maxdepth 1 ))
+/usr/bin/find /Applications -iname "Install macOS*" -type d -maxdepth 1 -exec rm -rf {} \;
 
-# Process array one by one to remove any out of date ones
-for i ($apps);
-do
-	/bin/rm -rf "$i"
-done
-
-# Reset the softwareupdate daemon.
-# It occasionally needs a kick to work reliably.
+# Reset the softwareupdate daemon
 /usr/bin/defaults delete /Library/Preferences/com.apple.SoftwareUpdate.plist
 rm /Library/Preferences/com.apple.SoftwareUpdate.plist
 /bin/launchctl kickstart -k system/com.apple.softwareupdated
 
-# Now use softwareupdate to cache the latest app bundle    
-( cd /Applications ; /usr/sbin/softwareupdate --fetch-full-installer --full-installer-version 11.3.1 )
+# Now use softwareupdate to cache the latest app bundle
+( cd /Applications ; /usr/sbin/softwareupdate --fetch-full-installer --full-installer-version "$downloados" )
 
-# Reset IFS
-IFS=$OIFS
+# Clear download flag
+/bin/rm /private/tmp/.downloadmacos
 
 exit 0

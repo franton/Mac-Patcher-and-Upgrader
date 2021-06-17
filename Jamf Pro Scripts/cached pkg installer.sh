@@ -1,9 +1,9 @@
 #!/bin/zsh
 
 # Main patching and installer script
-# Meant to be run periodically from launchd on macOS endpoint
-# Can also be run as a Jamf Self Service policy too. See parameter 4.
-# richard@richard-purves.com - 05-21-2021 - v1.5
+# Meant to be run periodically from launchd on macOS endpoint.
+# Now with Self Service and silent loginwindow support.
+# richard@richard-purves.com - 06-15-2021 - v1.8
 
 # Logging output to a file for testing
 #time=$( date "+%d%m%y-%H%M" )
@@ -42,7 +42,9 @@ IT IS VERY IMPORTANT YOU DO NOT INTERRUPT THIS PROCESS."
 
 # Script variables here
 alloweddeferral="5"
+forcedupdate="0"
 blockingapps=( "Microsoft PowerPoint" "Keynote" "zoom.us" )
+silent="0"
 
 waitroom="/Library/Application Support/JAMF/Waiting Room"
 workfolder="/usr/local/corp"
@@ -63,7 +65,6 @@ pb="$pbapp/Contents/MacOS/Progress"
 
 installiconpath="/System/Library/CoreServices/Installer.app/Contents/Resources"
 updateicon="/System/Library/PreferencePanes/SoftwareUpdate.prefPane/Contents/Resources/SoftwareUpdate.icns"
-lockimage="$imgfolder/logo.png"
 
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
@@ -80,29 +81,31 @@ bootvolname=$( /usr/sbin/diskutil info / | /usr/bin/awk '/Volume Name:/ { print 
 #                  #
 ####################
 
+# Keep the mac awake while this runs.
+/usr/bin/caffeinate -dis &
+
 # Stop IFS splitting on spaces
 OIFS=$IFS
 IFS=$'\n'
 
-# Is anyone logged in? Quit silently if not.
-if [[ "$currentuser" = "loginwindow" ]] || [[ -z "$currentuser" ]];
+# Is anyone logged in? Engage silent mode.
+[[ "$currentuser" = "loginwindow" ]] || [[ -z "$currentuser" ]] && silent="1"
+
+# Blocking application check here. Find the foreground app with lsappinfo assuming silent mode isn't engaged
+if [[ "$silent" == "0" ]];
 then
-	echo "No user present. Exiting."
-	exit 0
+	foregroundapp=$( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 "(in front)" | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' )
+
+	# check for blocking apps
+	for app ($blockingapps)
+	do
+		if [[ "$app" == "$foregroundapp" ]];
+		then
+			echo "Blocking app: $app"
+			exit 0
+		fi
+	done
 fi
-
-# Blocking application check here. Find the foreground app with lsappinfo
-foregroundapp=$( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 "(in front)" | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' )
-
-# check for blocking apps
-for app ($blockingapps)
-do
-	if [[ "$app" == "$foregroundapp" ]];
-	then
-		echo "Blocking app: $app"
-		exit 0
-	fi
-done
 
 ########################################
 #
@@ -131,6 +134,16 @@ do
 	feu=$( /usr/bin/defaults read "${pkgfilename}" FEU )
 	fut=$( /usr/bin/defaults read "${pkgfilename}" FUT )
 	osinstall=$( /usr/bin/defaults read "${pkgfilename}" OSInstaller )
+
+	# Check for any spurious no name filenames. Skip if found.
+    [[ "$pkgfilename" = ".plist" ]] && continue
+
+	# Check to see if any of the critical fields are blank. Skip if so.
+	[[ -z "$pkgname" ]] || [[ -z "$fullpath" ]] && continue
+
+	# Check to see if we've a match in the cached folder. Skip if not.
+	# We check for both file and directory in case of dmg, flat pkg or non flat pkg.
+	[[ ! -f "$fullpath/$pkgname" ]] && [[ ! -d "$fullpath/$pkgname" ]] && continue
 
 	# Store everything into a tsv temporary file
 	echo -e "${priority}\t${pkgname}\t${displayname}\t${fullpath}\t${reboot}\t${feu}\t${fut}\t${osinstall}" >> "$jsspkginfo"
@@ -174,25 +187,30 @@ done < "$jsspkginfo"
 applist=$( echo $applist | awk /./ )
 
 # Check deferral count. Prompt user if under, otherwise force the issue.
-if [ "$deferred" -lt "$alloweddeferral" ];
+# If silent mode then skip all this and just do it
+if [[ "$silent" == "0" ]];
 then
-	# Prompt user that updates are ready. Allow deferral.
-	test=$( "$os" -e 'display dialog "'"$msgnewsoftware"'\n\n'"$applist"'\n\nAuto deferral in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install", "Defer"} default button 2' )
-
-	# Did we defer?
-	if [ $( echo $test | /usr/bin/grep -c -e "Defer" -e "gave up:true" ) = "1" ];
+	if [ "$deferred" -lt "$alloweddeferral" ];
 	then
-		# Increment counter and store.
-		deferred=$(( deferred + 1 ))
-		/usr/bin/defaults write "$updatefile" deferral -int "$deferred"
+		# Prompt user that updates are ready. Allow deferral.
+		test=$( "$os" -e 'display dialog "'"$msgnewsoftware"'\n\n'"$applist"'\n\nAuto deferral in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install", "Defer"} default button 2' )
 
-		# Notify user how many deferrals are left and exit.
-		"$os" -e 'display dialog "You have used '"$deferred"' of '"$alloweddeferral"' allowed upgrade deferrals." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
-		exit 0
+		# Did we defer?
+		if [ $( echo $test | /usr/bin/grep -c -e "Defer" -e "gave up:true" ) = "1" ];
+		then
+			# Increment counter and store.
+			deferred=$(( deferred + 1 ))
+			/usr/bin/defaults write "$updatefile" deferral -int "$deferred"
+
+			# Notify user how many deferrals are left and exit.
+			"$os" -e 'display dialog "You have used '"$deferred"' of '"$alloweddeferral"' allowed upgrade deferrals." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
+			exit 0
+		fi
+	else
+		# Prompt user that updates are happening right now.
+		forced="1"
+		"$os" -e 'display dialog "'"$msgnewsoftforced"'\n\n'"$applist"'\n\nThe upgrade will start in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install"} default button 1'
 	fi
-else
-	# Prompt user that updates are happening right now.
-	"$os" -e 'display dialog "'"$msgnewsoftforced"'\n\n'"$applist"'\n\nThe upgrade will start in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install"} default button 1'
 fi
 
 # Store deferrals used, time of last update and then reset the deferral count
@@ -206,44 +224,21 @@ fi
 #
 ###################################
 
-# Check if device is on battery or ac power
-# Valid reports are `Battery Power` or `AC Power`
-pwrAdapter=$( /usr/bin/pmset -g ps | /usr/bin/grep "Now drawing" | /usr/bin/cut -d "'" -f2 )
-
-# Warn the user if not on AC power
-count=1
-while [[ "$count" -le "3" ]];
-do
-	[[ "$pwrAdapter" = "AC Power" ]] && break
-	count=$(( count + 1 ))
-	"$os" -e 'display dialog "'"$msgpowerwarning"'" giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
+if [[ "$silent" == "0" ]];
+then
+	# Check if device is on battery or ac power
+	# Valid reports are `Battery Power` or `AC Power`
 	pwrAdapter=$( /usr/bin/pmset -g ps | /usr/bin/grep "Now drawing" | /usr/bin/cut -d "'" -f2 )
-done
 
-#############################################
-#
-# Prepare and lockout the screen for installs
-#
-#############################################
-
-# Copy lockscreen to location where we can modify it. SIP prevents us doing necessary changes.
-/usr/bin/rsync -avrz /System/Library/CoreServices/RemoteManagement/AppleVNCServer.bundle/Contents/Support/LockScreen.app /private/tmp
-
-# Set the Info.plist to ensure we take over the entire display. Correct any permissions changes afterwards.
-/usr/bin/defaults write /private/tmp/LockScreen.app/Contents/Info.plist LSUIElement -int 0
-/usr/bin/defaults write /private/tmp/LockScreen.app/Contents/Info.plist LSUIPresentationMode -int 3
-/bin/chmod 644 /private/tmp/LockScreen.app/Contents/Info.plist
-
-# lock screen icon stuff here
-/bin/rm /private/tmp/LockScreen.app/Contents/Resources/Lock.jpg
-/bin/cp "$lockimage" /private/tmp/LockScreen.app/Contents/Resources/Lock.jpg
-
-# Progress.app seems to only like running with current user as owner.
-# We must "fix" every time we run.
-/usr/sbin/chown -R "$currentuser":staff "$pbapp"
-
-# Activate the LockScreen and background so we don't get stuck
-/private/tmp/LockScreen.app/Contents/MacOS/LockScreen &
+	# Warn the user if not on AC power
+	count=1
+	while [[ "$count" -le "3" ]];
+	do
+		[[ "$pwrAdapter" = "AC Power" ]] && break
+		count=$(( count + 1 ))
+		"$os" -e 'display dialog "'"$msgpowerwarning"'" giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
+		pwrAdapter=$( /usr/bin/pmset -g ps | /usr/bin/grep "Now drawing" | /usr/bin/cut -d "'" -f2 )
+	done
 
 ################################
 #
@@ -251,17 +246,18 @@ done
 #
 ################################
 
-# Find all applications with osascript and process them into an array.
-# Big thanks to William 'talkingmoose' Smith for this way of parsing lsappinfo
-runningapps=($( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 Foreground | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' ))
+	# Find all applications with osascript and process them into an array.
+	# Big thanks to William 'talkingmoose' Smith for this way of parsing lsappinfo
+	runningapps=($( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 Foreground | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' ))
 
-# Process the new array of apps and gently kill them off one by one.
-# Obviously we don't want to kill off either LockScreen or jamfHelper! Or a few others we don't routinely update.
-for app ($runningapps)
-do
-	[[ "$app" =~ ^(Finder|LockScreen|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
-	/usr/bin/pkill "$app"
-done
+	# Process the new array of apps and gently kill them off one by one.
+	# Obviously we don't want to kill a few apps we don't routinely update.
+	for app ($runningapps)
+	do
+		[[ "$app" =~ ^(Finder|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
+		/usr/bin/pkill "$app"
+	done
+fi
 
 ######################################
 #
@@ -285,7 +281,7 @@ cat <<EOF > "$pbjson"
 }
 EOF
 
-$pb $pbjson $canceljson &
+[[ "$silent" == "0" ]] && $pb $pbjson $canceljson &
 
 # Read the tsv line by line and install
 while read line
@@ -325,7 +321,18 @@ do
 
 		# Did someone try to hit the cancel button? Kill the generated file and restart the progress bar.
 		# They had a chance to defer earlier.
-		[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
+		if [ "$forced" = "0" ];
+		then
+			if [ -f "$canceljson" ];
+			then
+				/bin/rm "$canceljson"
+				/usr/bin/killall Progress 2>/dev/null
+				/bin/rm /private/tmp/.apppatchreboot
+				break
+			fi
+		else
+			[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
+		fi
 
 		percent=$( /bin/cat "$installoutput" | /usr/bin/grep "installer:%" | /usr/bin/cut -d"%" -f2 | /usr/bin/awk '{ print int($1) }' | /usr/bin/tail -n1 )
 		[ "$percent" -eq 100 ] && percent="99"
@@ -363,12 +370,14 @@ cat <<EOF > "$pbjson"
 EOF
 fi
 
-# Warn the user if any impending reboots
-[[ -f /private/tmp/.apppatchreboot ]] && "$os" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
+# Kill Progress and warn the user if any impending reboots, if not in silent mode
+sleep 3
+if [[ "$silent" == "0" ]];
+then
+	/usr/bin/killall Progress 2>/dev/null
 
-# Remove the progress bar. LockScreen if arm64. Intel is ok.
-/usr/bin/killall Progress 2>/dev/null
-[[ $( /usr/bin/arch ) = "arm64" ]] && /usr/bin/killall LockScreen 2>/dev/null
+	[[ -f /private/tmp/.apppatchreboot ]] && "$os" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
+fi
 
 ############################
 #
@@ -382,7 +391,7 @@ then
 	# Most of this work should be done already from the cached file info.
 	startos=$( /usr/bin/find "$fullpath" -iname "startosinstall" -type f )
 
-	# Set up a future interminate progress bar here. We'll invoke this later.
+	# Set up a future interminate progress bar here. We'll invoke this after.
 cat <<EOF > "$pbjson"
 {
     "percentage": -1,
@@ -391,6 +400,7 @@ cat <<EOF > "$pbjson"
     "icon": "$updateicon"
 }
 EOF
+	[[ "$silent" == "0" ]] && $pb $pbjson $canceljson &
 
 	# Attempt to suppress certain update dialogs
 	/usr/bin/touch "$homefolder"/.skipbuddy
@@ -457,30 +467,32 @@ EOF
 	# Are we running on Intel or Arm based macs? Apple Silicon macs require user credentials.
 	if [[ $( /usr/bin/arch ) == "arm64" ]];
 	then
-		# Apple Silicon macs. We need to prompt for the users credentials or this won't work.
+		# Apple Silicon macs. We need to prompt for the users credentials or this won't work. Skip this totally if in silent mode.
+		if [[ "$silent" == "0" ]];
+		then
 
-		# Work out appropriate icon for use
-		icon="/System/Applications/Utilities/Keychain Access.app/Contents/Resources/AppIcon.icns"
-		iconposix=$( echo $icon | /usr/bin/sed 's/\//:/g' )
-		iconposix="$bootvolname$iconposix"
+			# Work out appropriate icon for use
+			icon="/System/Applications/Utilities/Keychain Access.app/Contents/Resources/AppIcon.icns"
+			iconposix=$( echo $icon | /usr/bin/sed 's/\//:/g' )
+			iconposix="$bootvolname$iconposix"
 
-		# Warn user of what's about to happen
-		"$os" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
+			# Warn user of what's about to happen
+			"$os" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
 
-		# Loop three times for password validation
-		count=1
-		while [[ "$count" -le 3 ]];
-		do
+			# Loop three times for password validation
+			count=1
+			while [[ "$count" -le 3 ]];
+			do
 
-			# Prompt for a password. Verify it works a maximum of three times before quitting out.
-			# Also have timeout on the prompt so it doesn't just sit there.
-			password=$( "$os" -e 'display dialog "Please enter your macOS login password:" default answer "" with title "macOS Update - Authentication Required" giving up after 300 with text buttons {"OK"} default button 1 with hidden answer with icon file "'"$iconposix"'" ' -e 'return text returned of result' '' )
+				# Prompt for a password. Verify it works a maximum of three times before quitting out.
+				# Also have timeout on the prompt so it doesn't just sit there.
+				password=$( "$os" -e 'display dialog "Please enter your macOS login password:" default answer "" with title "macOS Update - Authentication Required" giving up after 300 with text buttons {"OK"} default button 1 with hidden answer with icon file "'"$iconposix"'" ' -e 'return text returned of result' '' )
 
-			# Escape any spaces in the password
-			escapepassword=$( echo ${password} | /usr/bin/python -c "import re, sys; print(re.escape(sys.stdin.read().strip()))" )
+				# Escape any spaces in the password
+				escapepassword=$( echo ${password} | /usr/bin/sed 's/ /\\\ /g' )
 
-			# Ok verify the input we got is correct
-			validpassword=$( /usr/bin/expect <<EOF
+				# Ok verify the input we got is correct
+				validpassword=$( /usr/bin/expect <<EOF
 spawn /usr/bin/dscl /Local/Default -authonly ${currentuser}
 expect {
 	"Password:" {
@@ -491,62 +503,70 @@ expect {
 EOF
 )
 
+				if [[ "${validpassword}" == *"eDSAuthFailed"* ]];
+				then
+					# Warn of incorrect password if counter is not set to three.
+					echo "Incorrect password. Counter: $count"
+					[[ "$count" -le 2 ]] && "$os" -e 'display dialog "Your entered password was incorrect.\n\nPlease try again." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
+				else
+					# Set flag for securetoken user
+					echo "Correct password. Proceeding."
+					break
+				fi
+
+				# Increment counter before looping
+				count=$(( count + 1 ))
+			done
+
+			# Final check of output. Quit here if we don't have a valid password after three attempts
 			if [[ "${validpassword}" == *"eDSAuthFailed"* ]];
 			then
-				# Warn of incorrect password if counter is not set to three.
-				echo "Incorrect password. Counter: $count"
-				[[ "$count" -le 2 ]] && "$os" -e 'display dialog "Your entered password was incorrect.\n\nPlease try again." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
-			else
-				# Set flag for securetoken user
-				echo "Correct password. Proceeding."
-				break
+				echo "Invalid password entered three times. Exiting."
+				"$os" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
+
+				# Quit the screenlock, caffeinate and clean up.
+				/usr/bin/killall Dock 2>/dev/null
+				/usr/bin/killall caffeinate 2>/dev/null
+				/bin/rm -R "$fullpath/$pkgfilename"
+				/bin/rm -f /Library/LaunchDaemons/com.corp.cleanupOSInstall.plist
+				/bin/rm -f "$workfolder"/finishOSInstall.sh
+				/usr/bin/find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefilename" \) -exec rm {} \;
+				/usr/bin/find "$waitroom" \( -iname \*.pkg -o -iname \*.cache.xml \) -exec rm {} \;
+				exit 1
 			fi
 
-			# Increment counter before looping
-			count=$(( count + 1 ))
-		done
-
-		# Final check of output. Quit here if we don't have a valid password after three attempts
-		if [[ "${validpassword}" == *"eDSAuthFailed"* ]];
-		then
-			echo "Invalid password entered three times. Exiting."
-			"$os" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
-
-			# Quit the screenlock, caffeinate and clean up.
-			/usr/bin/killall Dock 2>/dev/null
-			/usr/bin/killall caffeinate 2>/dev/null
-			/bin/rm -R "$fullpath/$pkgfilename"
-			/bin/rm -rf /private/tmp/LockScreen.app
-			/bin/rm -f /Library/LaunchDaemons/com.corp.cleanupOSInstall.plist
-			/bin/rm -f "$workfolder"/finishOSInstall.sh
-			/usr/bin/find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefilename" \) -exec rm {} \;
-			/usr/bin/find "$waitroom" \( -iname \*.pkg -o -iname \*.cache.xml \) -exec rm {} \;
-			exit 1
+			# Invoke startosinstall to perform the OS upgrade with the accepted credential. Run that in background.
+			# Then start up the progress bar app.
+			/usr/bin/nohup $startos --agreetolicense --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" > /private/tmp/nohup.log &
+			$pb $pbjson $canceljson &
 		fi
-
-		# Invoke startosinstall to perform the OS upgrade with the accepted credential. Run that in background.
-		# Then start up the progress bar app.
-		/private/tmp/LockScreen.app/Contents/MacOS/LockScreen &
-		/usr/bin/nohup $startos --agreetolicense --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" > /private/tmp/nohup.log &
-		$pb $pbjson $canceljson &
-
 	else
 		# Intel macs. We can just go for it.
 
 		# Invoke startosinstall to perform the OS upgrade. Run that in background.
 		# Then start up the progress bar app.
 		/usr/bin/nohup $startos --agreetolicense --rebootdelay 120 --forcequitapps > /private/tmp/nohup.log &
-		$pb $pbjson $canceljson &
+		[[ "$silent" == "0" ]] && $pb $pbjson $canceljson &
 	fi
 
-	# Code to stop people cancelling the update window. Also will not proceed until startosinstall is complete.
+	# Code to allow people to cancel the update window. Also will not proceed until startosinstall is complete.
 	while :;
 	do
-		# Wait a second per loop. That'll give Progress a chance to catch up as it only updates once per second.
-		sleep 1
+		# Wait two seconds per loop. That'll give Progress a chance to catch up as it only updates once per second.
+		sleep 2
 
-		# Stops the user cancelling the progress bar by force reloading it.
-		[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
+		# Stops the user cancelling the progress bar by force reloading it if we're not forcing things.
+		if [ "$forced" = "0" ];
+		then
+			if [ -f "$canceljson" ];
+			then
+				/bin/rm "$canceljson"
+				/usr/bin/killall startosinstall 2>/dev/null
+				break
+			fi
+		else
+			[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
+		fi
 
 		# This was such a pain to work out. We have to cat the entire file out,
 		# then use grep to find the particular line we want but this is also a trap.
@@ -578,28 +598,29 @@ fi
 
 # Run a jamf recon here so we don't overdo it by having it run every policy, only on success.
 # Unless we're doing an OS install, we have other ways for that above.
-[[ "$osinstall" == "0" ]] && /usr/bin/nohup $jb recon > /private/tmp/nohup.log &
-
 # Was a reboot requested? We should oblige IF we're not doing an OS upgrade
 # Give it a 1 minute delay to allow for policy reporting to finish
 if [[ "$osinstall" == "0" ]];
 then
+    $jb recon
 	if [ -f "/private/tmp/.apppatchreboot" ];
 	then
 		/bin/rm /private/tmp/.apppatchreboot
-		/sbin/shutdown -r +1 &
+		/sbin/shutdown -r +0.1 &
 	fi
 fi
 
-# Reset Dock back to normal. Kill the lockscreen and clean up files
-/usr/bin/killall Dock 2>/dev/null
-/usr/bin/killall LockScreen 2>/dev/null
+# Stop caffeinate so we can sleep again, then clean up files
 /usr/bin/killall Progress 2>/dev/null
 /usr/bin/killall caffeinate 2>/dev/null
-/bin/rm -rf /private/tmp/LockScreen.app
 /bin/rm -f "$jsspkginfo"
-/usr/bin/find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefilename" \) -exec rm {} \;
-/usr/bin/find "$waitroom" \( -iname \*.pkg -o -iname \*.cache.xml \) -exec rm {} \;
+
+# Clean these ONLY if we didn't cancel out
+if [ ! -f "$canceljson" ];
+then
+	/usr/bin/find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefilename" \) -exec rm {} \;
+	/usr/bin/find "$waitroom" \( -iname \*.pkg -o -iname \*.cache.xml \) -exec rm {} \;
+fi
 
 # Reset IFS
 IFS=$OIFS
