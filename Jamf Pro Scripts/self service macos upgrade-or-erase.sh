@@ -109,8 +109,7 @@ cat <<EOF > "$pbjson"
 EOF
 
 # Now use softwareupdate to cache the latest app bundle
-cd /Applications
-/usr/bin/nohup /usr/sbin/softwareupdate --fetch-full-installer --full-installer-version "$downloados" > /private/tmp/su.log &
+( cd /Applications ; /usr/sbin/softwareupdate --fetch-full-installer --full-installer-version "$downloados" &> /private/tmp/su.log & )
 $pb $pbjson $canceljson &
 
 while :;
@@ -307,11 +306,11 @@ then
 	then
 		# Apple Silicon Macs
 		echo "apple silicon upgrade startosinstall"
-		/usr/bin/nohup $startos --agreetolicense --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" > /private/tmp/update.log &
+		"$startos" --agreetolicense --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" &> /private/tmp/upgrade.log &
 	else
 		# Intel Macs
 		echo "intel upgrade startosinstall"
-		/usr/bin/nohup $startos --agreetolicense --rebootdelay 120 --forcequitapps > /private/tmp/update.log &
+		"$startos" --agreetolicense --rebootdelay 120 --forcequitapps &> /private/tmp/update.log &
 	fi
 fi
 
@@ -322,11 +321,11 @@ then
 	then
 		# Apple Silicon Macs
 		echo "apple silicon erase startosinstall"
-		/usr/bin/nohup $startos --agreetolicense --eraseinstall --newvolumename "Macintosh HD" --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" > /private/tmp/update.log &
+		"$startos" --agreetolicense --eraseinstall --newvolumename "Macintosh HD" --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" &> /private/tmp/update.log &
 	else
 		# Intel Macs
 		echo "intel erase startosinstall"
-		/usr/bin/nohup $startos --agreetolicense --eraseinstall --newvolumename "Macintosh HD" --rebootdelay 120 --forcequitapps > /private/tmp/update.log &
+		"$startos" --agreetolicense --eraseinstall --newvolumename "Macintosh HD" --rebootdelay 120 --forcequitapps &> /private/tmp/update.log &
 	fi
 fi
 
