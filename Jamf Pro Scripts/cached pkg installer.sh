@@ -152,6 +152,16 @@ do
 	unset priority pkgname displayname fullpath reboot feu fut osinstall
 done
 
+# Did we even write out a tsv file. Abort if not.
+if [[ ! -f "$jsspkginfo" ]];
+then
+    # Output fail message, then clean up files and folders
+	echo "No processed tsv file detected. Aborting."
+	/usr/bin/find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefilename" \) -exec rm {} \;
+	/usr/bin/find "$waitroom" \( -iname \*.pkg -o -iname \*.cache.xml \) -exec rm {} \;
+    exit 0
+fi
+
 # Sort the file using priority number, then alphabetical order on filename
 /usr/bin/sort "$jsspkginfo" -o "$jsspkginfo"
 
@@ -537,7 +547,7 @@ EOF
 
 			# Invoke startosinstall to perform the OS upgrade with the accepted credential. Run that in background.
 			# Then start up the progress bar app.
-			/usr/bin/nohup $startos --agreetolicense --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" > /private/tmp/nohup.log &
+			"$startos" --agreetolicense --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" &> /private/tmp/upgrade.log &
 			$pb $pbjson $canceljson &
 		fi
 	else
@@ -545,7 +555,7 @@ EOF
 
 		# Invoke startosinstall to perform the OS upgrade. Run that in background.
 		# Then start up the progress bar app.
-		/usr/bin/nohup $startos --agreetolicense --rebootdelay 120 --forcequitapps > /private/tmp/nohup.log &
+		"$startos" --agreetolicense --rebootdelay 120 --forcequitapps &> /private/tmp/upgrade.log &
 		[[ "$silent" == "0" ]] && $pb $pbjson $canceljson &
 	fi
 
@@ -574,14 +584,14 @@ EOF
 		# Unfortunately nohup is capturing all those characters and not doing that. We must then clean up.
 		# So change all those to unix linefeeds with tr, grab the latest (last) line and ...
 		# finally awk to convert to a suitable integer for use with Progress.
-		percent=$( /bin/cat /private/tmp/nohup.log | /usr/bin/grep "Preparing: " | /usr/bin/tr '\r' '\n' | /usr/bin/tail -n1 | /usr/bin/awk '{ print int($2) }' )
+		percent=$( /bin/cat /private/tmp/upgrade.log | /usr/bin/grep "Preparing: " | /usr/bin/tr '\r' '\n' | /usr/bin/tail -n1 | /usr/bin/awk '{ print int($2) }' )
 
 		# Trap edge cases of numbers being 0, which won't display or 100 which stops the progress bar.
 		[ "$percent" -eq 0 ] && percent="1"
 		[ "$percent" -ge 99 ] && percent="99"
 
 		# Unless we get the restart message, then we should cancel the bar by setting it to 100 then breaking out of the loop.
-		test=$( /bin/cat /private/tmp/nohup.log | /usr/bin/tr '\r' '\n' | /usr/bin/grep -c "Waiting to restart" )
+		test=$( /bin/cat /private/tmp/upgrade.log | /usr/bin/tr '\r' '\n' | /usr/bin/grep -c "Waiting to restart" )
 		[ "$test" = "1" ] && percent="100"
 cat <<EOF > "$pbjson"
 {
