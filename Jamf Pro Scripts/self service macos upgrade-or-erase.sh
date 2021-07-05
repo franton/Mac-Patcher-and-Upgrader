@@ -27,12 +27,13 @@ downloados="$6"
 
 # Work out where helper apps exist
 jb=$( which jamf )
-os=$( /usr/bin/which osascript )
+osa=$( /usr/bin/which osascript )
 pbapp="/Applications/Utilities/Progress.app"
 pb="$pbapp/Contents/MacOS/Progress"
 
 # Work out current user
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
+userid=$( /usr/bin/id -u $currentuser )
 
 # Now what is the boot volume called, just in case someone renamed it
 bootvolname=$( /usr/sbin/diskutil info / | /usr/bin/awk '/Volume Name:/ { print substr($0, index($0,$3)) ; }' )
@@ -78,7 +79,7 @@ while [[ "$count" -le "3" ]];
 do
 	[[ "$pwrAdapter" = "AC Power" ]] && break
 	count=$(( count + 1 ))
-	"$os" -e 'display dialog "'"$msgpowerwarning"'" giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
+	/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgpowerwarning"'" giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
 	pwrAdapter=$( /usr/bin/pmset -g ps | /usr/bin/grep "Now drawing" | /usr/bin/cut -d "'" -f2 )
 done
 
@@ -159,7 +160,7 @@ then
 	/bin/rm -f "$pbjson"
 	/bin/rm -f "$canceljson"
 	/bin/rm -f /private/tmp/su.log
-	"$os" -e 'display dialog "'"$msgdlfailed"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgdltitle"'" buttons {"Ok"} default button 1'
+	/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgdlfailed"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgdltitle"'" buttons {"Ok"} default button 1'
 	exit 0
 fi
 
@@ -185,7 +186,7 @@ then
 	# Apple Silicon macs. We need to prompt for the users credentials or this won't work. Skip this totally if in silent mode.
 
 	# Warn user of what's about to happen
-	"$os" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
+	/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
 
 	# Loop three times for password validation
 	count=1
@@ -230,7 +231,7 @@ EOF
 	if [[ "${validpassword}" == *"eDSAuthFailed"* ]];
 	then
 		echo "Invalid password entered three times. Exiting."
-		"$os" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
+		/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
 
 		# Clean up and quit.
 		/usr/bin/killall Progress 2>/dev/null
