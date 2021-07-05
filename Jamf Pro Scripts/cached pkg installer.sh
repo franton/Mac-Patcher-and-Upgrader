@@ -59,7 +59,7 @@ canceljson="/private/tmp/progresscancel.json"
 
 jssurl=$( /usr/bin/defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url )
 jb=$( which jamf )
-os=$( /usr/bin/which osascript )
+osa=$( /usr/bin/which osascript )
 pbapp="/Applications/Utilities/Progress.app"
 pb="$pbapp/Contents/MacOS/Progress"
 
@@ -67,6 +67,7 @@ installiconpath="/System/Library/CoreServices/Installer.app/Contents/Resources"
 updateicon="/System/Library/PreferencePanes/SoftwareUpdate.prefPane/Contents/Resources/SoftwareUpdate.icns"
 
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
+userid=$( /usr/bin/id -u $currentuser )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
 bootvolname=$( /usr/sbin/diskutil info / | /usr/bin/awk '/Volume Name:/ { print substr($0, index($0,$3)) ; }' )
 
@@ -203,7 +204,7 @@ then
 	if [ "$deferred" -lt "$alloweddeferral" ];
 	then
 		# Prompt user that updates are ready. Allow deferral.
-		test=$( "$os" -e 'display dialog "'"$msgnewsoftware"'\n\n'"$applist"'\n\nAuto deferral in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install", "Defer"} default button 2' )
+		test=$( /bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgnewsoftware"'\n\n'"$applist"'\n\nAuto deferral in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install", "Defer"} default button 2' )
 
 		# Did we defer?
 		if [ $( echo $test | /usr/bin/grep -c -e "Defer" -e "gave up:true" ) = "1" ];
@@ -213,13 +214,13 @@ then
 			/usr/bin/defaults write "$updatefile" deferral -int "$deferred"
 
 			# Notify user how many deferrals are left and exit.
-			"$os" -e 'display dialog "You have used '"$deferred"' of '"$alloweddeferral"' allowed upgrade deferrals." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
+			/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "You have used '"$deferred"' of '"$alloweddeferral"' allowed upgrade deferrals." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
 			exit 0
 		fi
 	else
 		# Prompt user that updates are happening right now.
 		forced="1"
-		"$os" -e 'display dialog "'"$msgnewsoftforced"'\n\n'"$applist"'\n\nThe upgrade will start in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install"} default button 1'
+		/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgnewsoftforced"'\n\n'"$applist"'\n\nThe upgrade will start in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install"} default button 1'
 	fi
 fi
 
@@ -246,7 +247,7 @@ then
 	do
 		[[ "$pwrAdapter" = "AC Power" ]] && break
 		count=$(( count + 1 ))
-		"$os" -e 'display dialog "'"$msgpowerwarning"'" giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
+		/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgpowerwarning"'" giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
 		pwrAdapter=$( /usr/bin/pmset -g ps | /usr/bin/grep "Now drawing" | /usr/bin/cut -d "'" -f2 )
 	done
 
@@ -487,7 +488,7 @@ EOF
 			iconposix="$bootvolname$iconposix"
 
 			# Warn user of what's about to happen
-			"$os" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
+			/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
 
 			# Loop three times for password validation
 			count=1
@@ -496,7 +497,7 @@ EOF
 
 				# Prompt for a password. Verify it works a maximum of three times before quitting out.
 				# Also have timeout on the prompt so it doesn't just sit there.
-				password=$( "$os" -e 'display dialog "Please enter your macOS login password:" default answer "" with title "macOS Update - Authentication Required" giving up after 300 with text buttons {"OK"} default button 1 with hidden answer with icon file "'"$iconposix"'" ' -e 'return text returned of result' '' )
+				password=$( /bin/launchctl asuser "$userid" "$osa" -e 'display dialog "Please enter your macOS login password:" default answer "" with title "macOS Update - Authentication Required" giving up after 300 with text buttons {"OK"} default button 1 with hidden answer with icon file "'"$iconposix"'" ' -e 'return text returned of result' '' )
 
 				# Escape any spaces in the password
 				escapepassword=$( echo ${password} | /usr/bin/sed 's/ /\\\ /g' )
@@ -532,7 +533,7 @@ EOF
 			if [[ "${validpassword}" == *"eDSAuthFailed"* ]];
 			then
 				echo "Invalid password entered three times. Exiting."
-				"$os" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
+				/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
 
 				# Quit the screenlock, caffeinate and clean up.
 				/usr/bin/killall Dock 2>/dev/null
