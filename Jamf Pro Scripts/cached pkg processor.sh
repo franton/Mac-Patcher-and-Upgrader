@@ -2,7 +2,7 @@
 
 # Cached application pkg processor script
 # Meant to be run after an application installer is cached to the mac
-# richard@richard-purves.com - 06-01-2021 - v1.1
+# richard@richard-purves.com - 08-19-2021 - v1.2
 
 # Variables here
 waitroom="/Library/Application Support/JAMF/Waiting Room"
@@ -97,10 +97,10 @@ then
 
   # Remove any duplicates using some zsh search to exclude most recent modified date files.
   # Direct output from the rm commands to null because if there's no duplicates, it'll error.
-  /bin/rm ${waitroom}/${name}*.pkg(.om[2,-1]) > /dev/null 2>&1
-  /bin/rm ${waitroom}/${name}*.pkg.zip(.om[2,-1]) > /dev/null 2>&1
-  /bin/rm ${waitroom}/${name}*.pkg.cache.xml(.om[2,-1]) > /dev/null 2>&1
-  /bin/rm ${infofolder}/*${name}*.plist(.om[2,-1]) > /dev/null 2>&1
+  /bin/rm ${waitroom}/${name}*.pkg(.om[2,-1]) 2>&1 > /dev/null
+  /bin/rm ${waitroom}/${name}*.pkg.zip(.om[2,-1]) 2>&1 > /dev/null
+  /bin/rm ${waitroom}/${name}*.pkg.cache.xml(.om[2,-1]) 2>&1 > /dev/null
+  /bin/rm ${infofolder}/*${name}*.plist(.om[2,-1]) 2>&1 > /dev/null
 else
 	# We are an OS installer. Special rules apply
 	/bin/echo "OS Installer specified"
