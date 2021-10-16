@@ -2,17 +2,12 @@
 
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint.
-# Now with Self Service and silent loginwindow support.
-# richard@richard-purves.com - 06-15-2021 - v1.8
+# richard@richard-purves.com - 09-02-2021 - v1.9
 
 # Logging output to a file for testing
-#time=$( date "+%d%m%y-%H%M" )
 #set -x
-#logfile=/Users/Shared/cachedappinstaller-"$time".log
+#logfile=/Users/Shared/cachedappinstaller.log
 #exec > $logfile 2>&1
-
-# Check to see if the Self Service switch has been used
-selfservice="$4"
 
 # Set user display messages here
 msgtitlenewsoft="New Software Available"
@@ -45,29 +40,27 @@ alloweddeferral="5"
 forcedupdate="0"
 blockingapps=( "Microsoft PowerPoint" "Keynote" "zoom.us" )
 silent="0"
-
 waitroom="/Library/Application Support/JAMF/Waiting Room"
 workfolder="/usr/local/corp"
 infofolder="$workfolder/cachedapps"
 imgfolder="$workfolder/imgs"
-installoutput="/private/tmp/installout.txt"
-jsspkginfo="/private/tmp/jsspkginfo.tsv"
 updatefilename="appupdates.plist"
 updatefile="$infofolder/$updatefilename"
 pbjson="/private/tmp/progressbar.json"
 canceljson="/private/tmp/progresscancel.json"
+installoutput="/private/tmp/installout.log"
+stosout="/private/tmp/upgrade.log"
+jsspkginfo="/private/tmp/jsspkginfo.tsv"
 
 jssurl=$( /usr/bin/defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url )
 jb=$( which jamf )
-osa=$( /usr/bin/which osascript )
+osa="/usr/bin/osascript"
 pbapp="/Applications/Utilities/Progress.app"
 pb="$pbapp/Contents/MacOS/Progress"
-
 installiconpath="/System/Library/CoreServices/Installer.app/Contents/Resources"
 updateicon="/System/Library/PreferencePanes/SoftwareUpdate.prefPane/Contents/Resources/SoftwareUpdate.icns"
-
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
-userid=$( /usr/bin/id -u $currentuser )
+curuserid=$( id -u "$currentuser" )
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
 bootvolname=$( /usr/sbin/diskutil info / | /usr/bin/awk '/Volume Name:/ { print substr($0, index($0,$3)) ; }' )
 
@@ -91,6 +84,15 @@ IFS=$'\n'
 
 # Is anyone logged in? Engage silent mode.
 [[ "$currentuser" = "loginwindow" ]] || [[ -z "$currentuser" ]] && silent="1"
+
+# Is the screen locked? Quit if so.
+if [ "$(/usr/libexec/PlistBuddy -c "print :IOConsoleUsers:0:CGSSessionScreenIsLocked" /dev/stdin 2>/dev/null <<< "$(/usr/sbin/ioreg -n Root -d1 -a)")" = "true" ];
+then
+	echo "Screen Locked. Exiting."
+	exit 0
+else
+	echo "Screen Unlocked."
+fi
 
 # Blocking application check here. Find the foreground app with lsappinfo assuming silent mode isn't engaged
 if [[ "$silent" == "0" ]];
@@ -153,7 +155,7 @@ do
 	unset priority pkgname displayname fullpath reboot feu fut osinstall
 done
 
-# Did we even write out a tsv file. Abort if not.
+# Did we even write out a tsv file
 if [[ ! -f "$jsspkginfo" ]];
 then
     # Output fail message, then clean up files and folders
@@ -204,7 +206,7 @@ then
 	if [ "$deferred" -lt "$alloweddeferral" ];
 	then
 		# Prompt user that updates are ready. Allow deferral.
-		test=$( /bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgnewsoftware"'\n\n'"$applist"'\n\nAuto deferral in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install", "Defer"} default button 2' )
+		test=$( /bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "'"$msgnewsoftware"'\n\n'"$applist"'\n\nAuto deferral in 60 seconds." giving up after 60 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install", "Defer"} default button 2' )
 
 		# Did we defer?
 		if [ $( echo $test | /usr/bin/grep -c -e "Defer" -e "gave up:true" ) = "1" ];
@@ -214,13 +216,13 @@ then
 			/usr/bin/defaults write "$updatefile" deferral -int "$deferred"
 
 			# Notify user how many deferrals are left and exit.
-			/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "You have used '"$deferred"' of '"$alloweddeferral"' allowed upgrade deferrals." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
+			/bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "You have used '"$deferred"' of '"$alloweddeferral"' allowed upgrade deferrals." giving up after 60 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
 			exit 0
 		fi
 	else
 		# Prompt user that updates are happening right now.
 		forced="1"
-		/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgnewsoftforced"'\n\n'"$applist"'\n\nThe upgrade will start in 30 seconds." giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install"} default button 1'
+		/bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "'"$msgnewsoftforced"'\n\n'"$applist"'\n\nThe upgrade will start in 60 seconds." giving up after 60 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Install"} default button 1'
 	fi
 fi
 
@@ -247,7 +249,7 @@ then
 	do
 		[[ "$pwrAdapter" = "AC Power" ]] && break
 		count=$(( count + 1 ))
-		/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "'"$msgpowerwarning"'" giving up after 30 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
+		/bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "'"$msgpowerwarning"'" giving up after 60 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
 		pwrAdapter=$( /usr/bin/pmset -g ps | /usr/bin/grep "Now drawing" | /usr/bin/cut -d "'" -f2 )
 	done
 
@@ -265,8 +267,8 @@ then
 	# Obviously we don't want to kill a few apps we don't routinely update.
 	for app ($runningapps)
 	do
-		[[ "$app" =~ ^(Finder|Progress|Google Chrome|Safari|Self Service|Terminal)$ ]] && continue
-		/usr/bin/pkill "$app"
+		[[ "$app" =~ (Finder|Progress|Google Chrome|Safari|Self Service|Terminal|Adobe*) ]] && continue
+		/usr/bin/killall "$app"
 	done
 fi
 
@@ -373,7 +375,7 @@ if [[ "$osinstall" == "0" ]];
 then
 cat <<EOF > "$pbjson"
 {
-	"percentage": 100,
+	"percentage": 99,
 	"title": "$msgprogresstitle",
 	"message": "Application Updates Completed",
 	"icon": "$updateicon"
@@ -385,9 +387,7 @@ fi
 sleep 3
 if [[ "$silent" == "0" ]];
 then
-	/usr/bin/killall Progress 2>/dev/null
-
-	[[ -f /private/tmp/.apppatchreboot ]] && "$os" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
+	[[ -f /private/tmp/.apppatchreboot ]] && "$osa" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
 fi
 
 ############################
@@ -400,7 +400,7 @@ if [[ "$osinstall" == "1" ]];
 then
 	# Work out where startosinstaller binary is located
 	# Most of this work should be done already from the cached file info.
-	startos=$( /usr/bin/find "$fullpath" -iname "startosinstall" -type f )
+	startos=$( /usr/bin/find "$fullpath/$pkgname" -iname "startosinstall" -type f )
 
 	# Set up a future interminate progress bar here. We'll invoke this after.
 cat <<EOF > "$pbjson"
@@ -411,7 +411,6 @@ cat <<EOF > "$pbjson"
     "icon": "$updateicon"
 }
 EOF
-	[[ "$silent" == "0" ]] && $pb $pbjson $canceljson &
 
 	# Attempt to suppress certain update dialogs
 	/usr/bin/touch "$homefolder"/.skipbuddy
@@ -488,7 +487,7 @@ EOF
 			iconposix="$bootvolname$iconposix"
 
 			# Warn user of what's about to happen
-			/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 30 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
+			/bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "We about to upgrade your macOS and need you to authenticate to continue.\n\nPlease enter your password on the next screen.\n\nPlease contact IT Helpdesk with any issues." giving up after 60 with icon file "'"$iconposix"'" with title "macOS Upgrade" buttons {"OK"} default button 1'
 
 			# Loop three times for password validation
 			count=1
@@ -497,7 +496,7 @@ EOF
 
 				# Prompt for a password. Verify it works a maximum of three times before quitting out.
 				# Also have timeout on the prompt so it doesn't just sit there.
-				password=$( /bin/launchctl asuser "$userid" "$osa" -e 'display dialog "Please enter your macOS login password:" default answer "" with title "macOS Update - Authentication Required" giving up after 300 with text buttons {"OK"} default button 1 with hidden answer with icon file "'"$iconposix"'" ' -e 'return text returned of result' '' )
+				password=$( /bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "Please enter your macOS login password:" default answer "" with title "macOS Update - Authentication Required" giving up after 300 with text buttons {"OK"} default button 1 with hidden answer with icon file "'"$iconposix"'" ' -e 'return text returned of result' '' )
 
 				# Escape any spaces in the password
 				escapepassword=$( echo ${password} | /usr/bin/sed 's/ /\\\ /g' )
@@ -518,7 +517,7 @@ EOF
 				then
 					# Warn of incorrect password if counter is not set to three.
 					echo "Incorrect password. Counter: $count"
-					[[ "$count" -le 2 ]] && "$os" -e 'display dialog "Your entered password was incorrect.\n\nPlease try again." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
+					[[ "$count" -le 2 ]] && /bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "Your entered password was incorrect.\n\nPlease try again." giving up after 60 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
 				else
 					# Set flag for securetoken user
 					echo "Correct password. Proceeding."
@@ -533,7 +532,7 @@ EOF
 			if [[ "${validpassword}" == *"eDSAuthFailed"* ]];
 			then
 				echo "Invalid password entered three times. Exiting."
-				/bin/launchctl asuser "$userid" "$osa" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 30 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
+				/bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "We could not validate your password.\n\nPlease try again later." giving up after 60 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
 
 				# Quit the screenlock, caffeinate and clean up.
 				/usr/bin/killall Dock 2>/dev/null
@@ -548,23 +547,20 @@ EOF
 
 			# Invoke startosinstall to perform the OS upgrade with the accepted credential. Run that in background.
 			# Then start up the progress bar app.
-			"$startos" --agreetolicense --rebootdelay 120 --forcequitapps --user "$currentuser" --stdinpass <<< "$password" &> /private/tmp/upgrade.log &
-			$pb $pbjson $canceljson &
+			"$startos" --agreetolicense --forcequitapps --user "$currentuser" --stdinpass <<< "$password" &> "$stosout" &
 		fi
 	else
 		# Intel macs. We can just go for it.
 
 		# Invoke startosinstall to perform the OS upgrade. Run that in background.
 		# Then start up the progress bar app.
-		"$startos" --agreetolicense --rebootdelay 120 --forcequitapps &> /private/tmp/upgrade.log &
-		[[ "$silent" == "0" ]] && $pb $pbjson $canceljson &
+		"$startos" --agreetolicense --forcequitapps &> "$stosout" &
 	fi
 
 	# Code to allow people to cancel the update window. Also will not proceed until startosinstall is complete.
 	while :;
 	do
-		# Wait two seconds per loop. That'll give Progress a chance to catch up as it only updates once per second.
-		sleep 2
+		sleep 1
 
 		# Stops the user cancelling the progress bar by force reloading it if we're not forcing things.
 		if [ "$forced" = "0" ];
@@ -573,7 +569,7 @@ EOF
 			then
 				/bin/rm "$canceljson"
 				/usr/bin/killall startosinstall 2>/dev/null
-				break
+				break 3
 			fi
 		else
 			[ -f "$canceljson" ] && { /bin/rm "$canceljson"; killall Progress; $pb $pbjson $canceljson &; }
@@ -585,15 +581,13 @@ EOF
 		# Unfortunately nohup is capturing all those characters and not doing that. We must then clean up.
 		# So change all those to unix linefeeds with tr, grab the latest (last) line and ...
 		# finally awk to convert to a suitable integer for use with Progress.
-		percent=$( /bin/cat /private/tmp/upgrade.log | /usr/bin/grep "Preparing: " | /usr/bin/tr '\r' '\n' | /usr/bin/tail -n1 | /usr/bin/awk '{ print int($2) }' )
+		percent=$( /bin/cat "$stosout" | /usr/bin/grep "Preparing: " | /usr/bin/tr '\r' '\n' | /usr/bin/tail -n1 | /usr/bin/awk '{ print int($2) }' )
+		waittest=$( /bin/cat "$stosout" | /usr/bin/grep -c "Waiting to restart" | /usr/bin/tr '\r' '\n' )
 
 		# Trap edge cases of numbers being 0, which won't display or 100 which stops the progress bar.
 		[ "$percent" -eq 0 ] && percent="1"
 		[ "$percent" -ge 99 ] && percent="99"
 
-		# Unless we get the restart message, then we should cancel the bar by setting it to 100 then breaking out of the loop.
-		test=$( /bin/cat /private/tmp/upgrade.log | /usr/bin/tr '\r' '\n' | /usr/bin/grep -c "Waiting to restart" )
-		[ "$test" = "1" ] && percent="100"
 cat <<EOF > "$pbjson"
 {
 	"percentage": $percent,
@@ -603,8 +597,17 @@ cat <<EOF > "$pbjson"
 }
 EOF
 		# If we detected the restart message, break out the loop here.
-		[[ "$test" == "1" ]] && { sleep 3; break; }
+		[ "$waittest" = "1" ] && break
+
+		# If startosinstall quit suddenly, break here too
+		[ -z $( /usr/bin/pgrep startosinstall ) ] && { error=1; break; }
 	done
+fi
+
+# Did startosinstall quit part way? Warn user.
+if [ "$error" = "1" ];
+then
+	/bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "The upgrade encountered an unexpected error.\n\nPlease try again later." giving up after 60 with icon file "'"$iconposix"'" with title "Error" buttons {"OK"} default button 1'
 fi
 
 # Run a jamf recon here so we don't overdo it by having it run every policy, only on success.
