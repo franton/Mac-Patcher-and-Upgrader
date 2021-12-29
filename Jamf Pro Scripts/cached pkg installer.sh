@@ -2,7 +2,8 @@
 
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint.
-# richard@richard-purves.com - 09-02-2021 - v1.9
+# Now with silent loginwindow support.
+# richard@richard-purves.com - 12-29-2021 - v2.0
 
 # Logging output to a file for testing
 #set -x
@@ -60,7 +61,14 @@ pb="$pbapp/Contents/MacOS/Progress"
 installiconpath="/System/Library/CoreServices/Installer.app/Contents/Resources"
 updateicon="/System/Library/PreferencePanes/SoftwareUpdate.prefPane/Contents/Resources/SoftwareUpdate.icns"
 currentuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
-curuserid=$( id -u "$currentuser" )
+
+if [ ! -z "$currentuser" ];
+then
+	curuserid=$( id -u "$currentuser" 2>/dev/null )
+else
+	curuserid="501"
+fi
+
 homefolder=$( dscl . -read /Users/$currentuser NFSHomeDirectory | awk '{ print $2 }' )
 bootvolname=$( /usr/sbin/diskutil info / | /usr/bin/awk '/Volume Name:/ { print substr($0, index($0,$3)) ; }' )
 
@@ -83,30 +91,28 @@ OIFS=$IFS
 IFS=$'\n'
 
 # Is anyone logged in? Engage silent mode.
-[[ "$currentuser" = "loginwindow" ]] || [[ -z "$currentuser" ]] && silent="1"
+[ "$currentuser" = "loginwindow" ] || [ -z "$currentuser" ] && silent="1"
+echo "Current user: $currentuser"
 
-# Is the screen locked? Quit if so.
+# Is the screen locked? Quit if idle time under eight hours.
 if [ "$(/usr/libexec/PlistBuddy -c "print :IOConsoleUsers:0:CGSSessionScreenIsLocked" /dev/stdin 2>/dev/null <<< "$(/usr/sbin/ioreg -n Root -d1 -a)")" = "true" ];
 then
-	echo "Screen Locked. Exiting."
-	exit 0
+	idletime=$( /usr/sbin/ioreg -c IOHIDSystem | /usr/bin/awk '/HIDIdleTime/ {print int($NF/1000000000); exit}')
+	echo "Screen Locked. User idle time: $idletime"
+	[ "$idletime" -lt 14400 ] && { echo "Idle time less than four hours. Exiting."; exit 0; }
 else
 	echo "Screen Unlocked."
 fi
 
 # Blocking application check here. Find the foreground app with lsappinfo assuming silent mode isn't engaged
-if [[ "$silent" == "0" ]];
+if [ "$silent" = "0" ];
 then
 	foregroundapp=$( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 "(in front)" | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' )
 
 	# check for blocking apps
 	for app ($blockingapps)
 	do
-		if [[ "$app" == "$foregroundapp" ]];
-		then
-			echo "Blocking app: $app"
-			exit 0
-		fi
+		[ "$app" = "$foregroundapp" ] && { echo "Blocking app: $app"; exit 0; }
 	done
 fi
 
@@ -139,14 +145,14 @@ do
 	osinstall=$( /usr/bin/defaults read "${pkgfilename}" OSInstaller )
 
 	# Check for any spurious no name filenames. Skip if found.
-    [[ "$pkgfilename" = ".plist" ]] && continue
+	[ "$pkgfilename" = ".plist" ] && continue
 
 	# Check to see if any of the critical fields are blank. Skip if so.
-	[[ -z "$pkgname" ]] || [[ -z "$fullpath" ]] && continue
+	[ -z "$pkgname" ] || [ -z "$fullpath" ] && continue
 
 	# Check to see if we've a match in the cached folder. Skip if not.
 	# We check for both file and directory in case of dmg, flat pkg or non flat pkg.
-	[[ ! -f "$fullpath/$pkgname" ]] && [[ ! -d "$fullpath/$pkgname" ]] && continue
+	[ ! -f "$fullpath/$pkgname" ] && [ ! -d "$fullpath/$pkgname" ] && continue
 
 	# Store everything into a tsv temporary file
 	echo -e "${priority}\t${pkgname}\t${displayname}\t${fullpath}\t${reboot}\t${feu}\t${fut}\t${osinstall}" >> "$jsspkginfo"
@@ -156,20 +162,21 @@ do
 done
 
 # Did we even write out a tsv file
-if [[ ! -f "$jsspkginfo" ]];
+if [ ! -f "$jsspkginfo" ];
 then
-    # Output fail message, then clean up files and folders
+	# Output fail message, then clean up files and folders
 	echo "No processed tsv file detected. Aborting."
 	/usr/bin/find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefilename" \) -exec rm {} \;
 	/usr/bin/find "$waitroom" \( -iname \*.pkg -o -iname \*.cache.xml \) -exec rm {} \;
-    exit 0
+	exit 0
 fi
 
 # Sort the file using priority number, then alphabetical order on filename
 /usr/bin/sort "$jsspkginfo" -o "$jsspkginfo"
 
 # Check to see if there's a macOS installer
-osinstall=$( /usr/bin/tail -n 1 "$jsspkginfo" | /usr/bin/cut -f2 -d$'\t' )
+# placed a space between the -d and the $ due to suspected Jamf PI being logged.
+osinstall=$( /usr/bin/tail -n 1 "$jsspkginfo" | /usr/bin/cut -f2 -d $'\t' )
 [[ "$osinstall" == *"Install macOS"* ]] && osinstall="1" || osinstall="0"
 
 ################################
@@ -201,7 +208,7 @@ applist=$( echo $applist | awk /./ )
 
 # Check deferral count. Prompt user if under, otherwise force the issue.
 # If silent mode then skip all this and just do it
-if [[ "$silent" == "0" ]];
+if [ "$silent" = "0" ];
 then
 	if [ "$deferred" -lt "$alloweddeferral" ];
 	then
@@ -237,7 +244,7 @@ fi
 #
 ###################################
 
-if [[ "$silent" == "0" ]];
+if [ "$silent" = "0" ];
 then
 	# Check if device is on battery or ac power
 	# Valid reports are `Battery Power` or `AC Power`
@@ -245,9 +252,9 @@ then
 
 	# Warn the user if not on AC power
 	count=1
-	while [[ "$count" -le "3" ]];
+	while [ "$count" -le "3" ];
 	do
-		[[ "$pwrAdapter" = "AC Power" ]] && break
+		[ "$pwrAdapter" = "AC Power" ] && break
 		count=$(( count + 1 ))
 		/bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "'"$msgpowerwarning"'" giving up after 60 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Proceed"} default button 1'
 		pwrAdapter=$( /usr/bin/pmset -g ps | /usr/bin/grep "Now drawing" | /usr/bin/cut -d "'" -f2 )
@@ -287,14 +294,14 @@ totalappnumber=${#cachedpkg[@]}
 # Set initial message and then run the app as a background app.
 cat <<EOF > "$pbjson"
 {
-    "percentage": -1,
-    "title": "$msgprogresstitle",
-    "message": "Preparing to upgrade ...",
-    "icon": "$updateicon"
+	"percentage": -1,
+	"title": "$msgprogresstitle",
+	"message": "Preparing to upgrade ...",
+	"icon": "$updateicon"
 }
 EOF
 
-[[ "$silent" == "0" ]] && $pb $pbjson $canceljson &
+[ "$silent" = "0" ] && $pb $pbjson $canceljson &
 
 # Read the tsv line by line and install
 while read line
@@ -313,14 +320,14 @@ do
 
 	# Does this or any other installer require a restart.
 	# Mark it so with an empty file.
-	[[ "$reboot" == "1" ]] && touch /private/tmp/.apppatchreboot
+	[ "$reboot" = "1" ] && touch /private/tmp/.apppatchreboot
 
 	# Have the Jamf FEU/FUT options been set for this package
-	[[ "$feu" == "1" ]] && installoption="$installoption -feu"
-	[[ "$fut" == "1" ]] && installoption="$installoption -fut"
+	[ "$feu" = "1" ] && installoption="$installoption -feu"
+	[ "$fut" = "1" ] && installoption="$installoption -fut"
 
 	# Is this an OS install. Break out of the loop. Handle this separately.
-	[[ "$osinstall" == "1" ]] && continue
+	[ "$osinstall" = "1" ] && continue
 
 	# Perform the installation as a background task with the correct options
 	# Output progress to a text file. We'll use that next.
@@ -371,7 +378,7 @@ EOF
 done < "$jsspkginfo"
 
 # Finally end the progress bar
-if [[ "$osinstall" == "0" ]];
+if [ "$osinstall" = "0" ];
 then
 cat <<EOF > "$pbjson"
 {
@@ -385,9 +392,9 @@ fi
 
 # Kill Progress and warn the user if any impending reboots, if not in silent mode
 sleep 3
-if [[ "$silent" == "0" ]];
+if [ "$silent" = "0" ];
 then
-	[[ -f /private/tmp/.apppatchreboot ]] && "$osa" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
+	[ -f /private/tmp/.apppatchreboot ] && "$osa" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
 fi
 
 ############################
@@ -396,8 +403,9 @@ fi
 #
 ############################
 
-if [[ "$osinstall" == "1" ]];
+if [ "$osinstall" = "1" ];
 then
+	echo "Update macOS initiated"
 	# Work out where startosinstaller binary is located
 	# Most of this work should be done already from the cached file info.
 	startos=$( /usr/bin/find "$fullpath/$pkgname" -iname "startosinstall" -type f )
@@ -405,10 +413,10 @@ then
 	# Set up a future interminate progress bar here. We'll invoke this after.
 cat <<EOF > "$pbjson"
 {
-    "percentage": -1,
-    "title": "$msgosupgtitle",
-    "message": "Preparing to upgrade ..",
-    "icon": "$updateicon"
+	"percentage": -1,
+	"title": "$msgosupgtitle",
+	"message": "Preparing to upgrade ..",
+	"icon": "$updateicon"
 }
 EOF
 
@@ -430,9 +438,22 @@ while [ -e /var/db/.AppleUpgrade ]; do sleep 5; done
 INSTALLER_PROGRESS_PROCESS=$( /usr/bin/pgrep -l "Installer Progress" )
 until [ "$INSTALLER_PROGRESS_PROCESS" = "" ];
 do
-    sleep 15
-    INSTALLER_PROGRESS_PROCESS=$( /usr/bin/pgrep -l "Installer Progress" )
+	sleep 15
+	INSTALLER_PROGRESS_PROCESS=$( /usr/bin/pgrep -l "Installer Progress" )
 done
+
+# Look for a user
+loggedinuser=$( /usr/sbin/scutil <<< "show State:/Users/ConsoleUser" | /usr/bin/awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
+
+# If loginwindow, setup assistant or no user, then we're in a DEP environment.
+if [ "$loggedinuser" = "loginwindow" ] || [ "$loggedinuser" = "_mbsetupuser" ] || [ "$loggedinuser" = "root" ] || [ -z "$loggedinuser" ];
+then
+	# Now check to see if Setup Assistant is a running process. Exit if so.
+	[ $( /usr/bin/pgrep "Setup Assistant" ) ] && exit 0
+
+	# We're fine to restart loginwindow at this point.
+	/usr/bin/killall -9 loginwindow
+fi
 
 # Update Device Information
 /usr/local/bin/jamf manage
@@ -457,16 +478,16 @@ cat << "EOF" > /Library/LaunchDaemons/com.corp.cleanupOSInstall.plist
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key>
-    <string>com.corp.cleanupOSInstall</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/zsh</string>
-        <string>-c</string>
-        <string>/usr/local/corp/finishOSInstall.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
+	<key>Label</key>
+	<string>com.corp.cleanupOSInstall</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/zsh</string>
+		<string>-c</string>
+		<string>/usr/local/corp/finishOSInstall.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
 </dict>
 </plist>
 EOF
@@ -475,10 +496,10 @@ EOF
 	/bin/chmod 644 /Library/LaunchDaemons/com.corp.cleanupOSInstall.plist
 
 	# Are we running on Intel or Arm based macs? Apple Silicon macs require user credentials.
-	if [[ $( /usr/bin/arch ) == "arm64" ]];
+	if [ $( /usr/bin/arch ) = "arm64" ];
 	then
 		# Apple Silicon macs. We need to prompt for the users credentials or this won't work. Skip this totally if in silent mode.
-		if [[ "$silent" == "0" ]];
+		if [ "$silent" = "0" ];
 		then
 
 			# Work out appropriate icon for use
@@ -491,7 +512,7 @@ EOF
 
 			# Loop three times for password validation
 			count=1
-			while [[ "$count" -le 3 ]];
+			while [ "$count" -le 3 ];
 			do
 
 				# Prompt for a password. Verify it works a maximum of three times before quitting out.
@@ -517,7 +538,7 @@ EOF
 				then
 					# Warn of incorrect password if counter is not set to three.
 					echo "Incorrect password. Counter: $count"
-					[[ "$count" -le 2 ]] && /bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "Your entered password was incorrect.\n\nPlease try again." giving up after 60 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
+					[ "$count" -le 2 ] && /bin/launchctl asuser "$curuserid" "$osa" -e 'display dialog "Your entered password was incorrect.\n\nPlease try again." giving up after 60 with icon file "'"$iconposix"'" with title "Incorrect Password" buttons {"OK"} default button 1'
 				else
 					# Set flag for securetoken user
 					echo "Correct password. Proceeding."
@@ -537,7 +558,6 @@ EOF
 				# Quit the screenlock, caffeinate and clean up.
 				/usr/bin/killall Dock 2>/dev/null
 				/usr/bin/killall caffeinate 2>/dev/null
-				/bin/rm -R "$fullpath/$pkgfilename"
 				/bin/rm -f /Library/LaunchDaemons/com.corp.cleanupOSInstall.plist
 				/bin/rm -f "$workfolder"/finishOSInstall.sh
 				/usr/bin/find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefilename" \) -exec rm {} \;
@@ -545,12 +565,18 @@ EOF
 				exit 1
 			fi
 
+			# Temporarily disable Jamf Connect Login
+			/usr/local/bin/authchanger -reset
+
 			# Invoke startosinstall to perform the OS upgrade with the accepted credential. Run that in background.
 			# Then start up the progress bar app.
 			"$startos" --agreetolicense --forcequitapps --user "$currentuser" --stdinpass <<< "$password" &> "$stosout" &
 		fi
 	else
 		# Intel macs. We can just go for it.
+
+		# Temporarily disable Jamf Connect Login
+		/usr/local/bin/authchanger -reset
 
 		# Invoke startosinstall to perform the OS upgrade. Run that in background.
 		# Then start up the progress bar app.
@@ -614,7 +640,7 @@ fi
 # Unless we're doing an OS install, we have other ways for that above.
 # Was a reboot requested? We should oblige IF we're not doing an OS upgrade
 # Give it a 1 minute delay to allow for policy reporting to finish
-if [[ "$osinstall" == "0" ]];
+if [ "$osinstall" = "0" ];
 then
     $jb recon
 	if [ -f "/private/tmp/.apppatchreboot" ];
