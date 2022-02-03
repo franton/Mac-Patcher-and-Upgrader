@@ -3,7 +3,7 @@
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint.
 # Now with silent loginwindow support.
-# richard@richard-purves.com - 12-29-2021 - v2.0
+# richard@richard-purves.com - 02-02-2022 - v2.1
 
 # Logging output to a file for testing
 #set -x
@@ -266,16 +266,16 @@ then
 #
 ################################
 
-	# Find all applications with osascript and process them into an array.
-	# Big thanks to William 'talkingmoose' Smith for this way of parsing lsappinfo
-	runningapps=($( /usr/bin/lsappinfo list | /usr/bin/grep -B 4 Foreground | /usr/bin/awk -F '\\) "|" ASN' 'NF > 1 { print $2 }' ))
-
-	# Process the new array of apps and gently kill them off one by one.
-	# Obviously we don't want to kill a few apps we don't routinely update.
-	for app ($runningapps)
+	# Less severe way of closing only the applications we need to
+	# Iterate through previously captured tsv file and strip off versioning
+	# Now strip off any trailing whitespace to stop things failing
+	# Finally work out PID numbers from a wildcard search of what's left and ...
+	# kill -9 them all.
+	while read line || [ -n "$line" ];
 	do
-		[[ "$app" =~ (Finder|Progress|Google Chrome|Safari|Self Service|Terminal|Adobe*) ]] && continue
-		/usr/bin/killall "$app"
+		app=$( echo $line | /usr/bin/cut -f3 -d$'\t' | /usr/bin/sed "s/[-0-9.]*$//" )
+		[ "${app: -1}" = " " ] && app=${app[1,-2]}
+		kill -9 $( /bin/ps ax | /usr/bin/grep -i "$app" | /usr/bin/grep -v grep | /usr/bin/awk '{ print $1 }' )
 	done
 fi
 
@@ -391,7 +391,6 @@ EOF
 fi
 
 # Kill Progress and warn the user if any impending reboots, if not in silent mode
-sleep 3
 if [ "$silent" = "0" ];
 then
 	[ -f /private/tmp/.apppatchreboot ] && "$osa" -e 'display dialog "'"$msgrebootwarning"'" giving up after 15 with icon file "'"$iconposix"'" with title "'"$msgtitlenewsoft"'" buttons {"Ok"} default button 1'
