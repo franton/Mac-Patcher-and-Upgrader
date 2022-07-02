@@ -3,7 +3,7 @@
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint.
 # Now with silent loginwindow support.
-# richard@richard-purves.com - 02-02-2022 - v2.1
+# richard@richard-purves.com - 07-02-2022 - v2.2
 
 # Logging output to a file for testing
 #set -x
@@ -135,14 +135,14 @@ cachedpkg=($( find "$infofolder" -type f \( -iname "*.plist" ! -iname "$updatefi
 for pkgfilename ($cachedpkg)
 do
 	# Now read out all the info we've collected from the cache file.
-	priority=$( /usr/bin/defaults read "${pkgfilename}" Priority )
-	pkgname=$( /usr/bin/defaults read "${pkgfilename}" PkgName )
-	displayname=$( /usr/bin/defaults read "${pkgfilename}" DisplayName )
-	fullpath=$( /usr/bin/defaults read "${pkgfilename}" FullPath )
-	reboot=$( /usr/bin/defaults read "${pkgfilename}" Reboot )
-	feu=$( /usr/bin/defaults read "${pkgfilename}" FEU )
-	fut=$( /usr/bin/defaults read "${pkgfilename}" FUT )
-	osinstall=$( /usr/bin/defaults read "${pkgfilename}" OSInstaller )
+	priority=$( /usr/bin/plutil -extract Priority raw -o - "${pkgfilename}" )
+	pkgname=$( /usr/bin/plutil -extract PkgName raw -o - "${pkgfilename}" )
+	displayname=$( /usr/bin/plutil -extract DisplayName raw -o - "${pkgfilename}" )
+	fullpath=$( /usr/bin/plutil -extract FullPath raw -o - "${pkgfilename}" )
+	reboot=$( /usr/bin/plutil -extract Reboot raw -o - "${pkgfilename}" )
+	feu=$( /usr/bin/plutil -extract FEU raw -o - "${pkgfilename}" )
+	fut=$( /usr/bin/plutil -extract FUT raw -o - "${pkgfilename}" )
+	osinstall=$( /usr/bin/plutil -extract OSInstaller raw -o - "${pkgfilename}" )
 
 	# Check for any spurious no name filenames. Skip if found.
 	[ "$pkgfilename" = ".plist" ] && continue
