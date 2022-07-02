@@ -2,7 +2,7 @@
 
 # Cached application pkg processor script
 # Meant to be run after an application installer is cached to the mac
-# richard@richard-purves.com - 08-19-2021 - v1.2
+# richard@richard-purves.com - 07-02-2022 - v1.3
 
 # Variables here
 waitroom="/Library/Application Support/JAMF/Waiting Room"
@@ -61,16 +61,18 @@ then
   fut=$( echo $pkgrecord | /usr/bin/xmllint --format --xpath '//package/fill_user_template' - | /usr/bin/sed -e 's/<[^>]*>//g' )
 
   # Now write out all the info we've collected to our cache file. We'll process these in another script.
-  # The name of the file should be date-name.plist
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist PkgName -string "$pkgfilename"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist FullPath -string "$cachepath"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist DisplayName -string "$displayname"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist Priority -int "$priority"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist Reboot -bool "$reboot"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist CacheDate -date "$tdydate"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist FEU -bool "$feu"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist FUT -bool "$fut"
-  /usr/bin/defaults write "$infofolder"/"${pkgfilename}".plist OSInstaller -bool FALSE
+  # The name of the file should be date-name.plist.
+  # Create the file with plutil and then insert the keys required afterwards. Original defaults code was throwing weird errors from macOS 12.
+  /usr/bin/plutil -create xml1 "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert PkgName -string "$pkgfilename" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert FullPath -string "$cachepath" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert DisplayName -string "$displayname" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert Priority -integer "$priority" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert Reboot -bool "$reboot" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert CacheDate -date "$tdydate" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert FEU -bool "$feu" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert FUT -bool "$fut" "$infofolder"/"${pkgfilename}".plist
+  /usr/bin/plutil -insert OSInstaller -bool FALSE "$infofolder"/"${pkgfilename}".plist
 
   # Look for any already cached pkgs and cache files. We already have a processed name from earlier.
   # Count number of dash characters in filename, then count number of spaces
@@ -119,15 +121,16 @@ else
 		apppath=$( /usr/bin/dirname $app )
 
 		# Write out a mostly hard coded file for later processing. Make sure OSInstaller is set for later use.
-		/usr/bin/defaults write "$infofolder"/"$appname".plist PkgName -string "$appname"
-		/usr/bin/defaults write "$infofolder"/"$appname".plist FullPath -string "$apppath"
-		/usr/bin/defaults write "$infofolder"/"$appname".plist DisplayName -string "$appname"
-		/usr/bin/defaults write "$infofolder"/"$appname".plist Priority -int "20"
-		/usr/bin/defaults write "$infofolder"/"$appname".plist Reboot -bool FALSE
-		/usr/bin/defaults write "$infofolder"/"$appname".plist CacheDate -date "$tdydate"
-		/usr/bin/defaults write "$infofolder"/"$appname".plist FEU -bool FALSE
-		/usr/bin/defaults write "$infofolder"/"$appname".plist FUT -bool False
-		/usr/bin/defaults write "$infofolder"/"$appname".plist OSInstaller -bool TRUE
+		/usr/bin/plutil -create xml1 "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert PkgName -string "$appname" "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert FullPath -string "$apppath" "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert DisplayName -string "$appname" "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert Priority -integer 20 "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert Reboot -bool FALSE "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert CacheDate -date "$tdydate" "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert FEU -bool FALSE "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert FUT -bool FALSE "$infofolder"/"$appname".plist
+		/usr/bin/plutil -insert OSInstaller -bool TRUE "$infofolder"/"$appname".plist
 	else
 		echo "Installer not found: $app"
 	fi
