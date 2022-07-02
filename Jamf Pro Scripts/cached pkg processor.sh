@@ -24,7 +24,7 @@ osappbundle="$4"
 
 # Lastly work out todays date.
 # We may use this in the future, but at the moment it probably won't be.
-tdydate=$( /bin/date "+%Y-%m-%d %H:%M:%S" )
+tdydate=$( /bin/date -u +"%Y-%m-%dT%H:%M:%SZ" )
 
 # Special case for the OS installer switch
 if [ -z "$osappbundle" ];
