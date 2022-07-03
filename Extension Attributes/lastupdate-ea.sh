@@ -5,7 +5,7 @@
 # Reads from the deferral file on the mac if it exists
 # We return an output as a Jamf compliant date YYYY-MM-DD hh:mm:ss
 
-test=$( /usr/bin/defaults read /usr/local/corp/cachedapps/appupdates.plist lastupdate )
+test=$( /usr/bin/plutil -extract lastupdate raw -o - /usr/local/corp/cachedapps/appupdates.plist | /usr/bin/tr 'T' ' ' | /usr/bin/tr -d "Z" )
 
 if [ ! -z "$test" ];
 then
