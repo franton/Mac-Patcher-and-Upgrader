@@ -36,7 +36,7 @@ https://user-images.githubusercontent.com/5807892/118586556-d512a380-b74f-11eb-8
 
 Requirements
 ------------
-* macOS 10.15 and above
+* macOS 12 and above
 * Jamf Pro. v10 is preferred but we're not using anything version specific.
 * Cloud Distribution point or On-Prem HTTP distribution server(s).
 * Progress Bar requires the [swift-progress](https://github.com/adriannier/swift-progress) app from [Adrian Nier](https://github.com/adriannier).
