@@ -275,7 +275,8 @@ then
 	do
 		app=$( echo $line | /usr/bin/cut -f3 -d$'\t' | /usr/bin/sed "s/[-0-9.]*$//" )
 		[ "${app: -1}" = " " ] && app=${app[1,-2]}
-		kill -9 $( /bin/ps ax | /usr/bin/grep -i "$app" | /usr/bin/grep -v grep | /usr/bin/awk '{ print $1 }' )
+	        pids=$( /bin/ps ax | /usr/bin/grep -i "$app" | /usr/bin/grep -v grep | /usr/bin/awk '{ print $1 }' )
+	    	[ ! -z "$pids" ] && echo $pids | /usr/bin/xargs kill -9
 	done
 fi
 
