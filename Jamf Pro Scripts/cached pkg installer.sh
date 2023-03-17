@@ -3,7 +3,7 @@
 # Main patching and installer script
 # Meant to be run periodically from launchd on macOS endpoint.
 # Now with silent loginwindow support.
-# richard@richard-purves.com - 07-02-2022 - v2.2
+# richard@richard-purves.com - 17-03-2023 - v2.3
 
 # Logging output to a file for testing
 #set -x
@@ -332,7 +332,7 @@ do
 
 	# Perform the installation as a background task with the correct options
 	# Output progress to a text file. We'll use that next.
-	$jb install $installoption -package $pkgname -path $fullpath -target / -showProgress > "$installoutput" &
+	/usr/sbin/installer -target / -package "${fullpath}/${pkgname}" -verboseR > "$installoutput" &
 
 	while :;
 	do
@@ -369,8 +369,8 @@ cat <<EOF > "$pbjson"
 EOF
 
 		# Check to see if we've had a finished install. Break out the loop if so.
-		complete=$( /bin/cat "$installoutput" | /usr/bin/grep -c -E "Successfully installed|failed" )
-		[ "$complete" = "1" ] && { /bin/rm -f "$installoutput"; break; }
+		complete=$( /bin/cat "$installoutput" | /usr/bin/grep -c -E "successful|failed" )
+		[ "$complete" != "0" ] && { /bin/rm -f "$installoutput"; break; }
 	done
 
 	# Clean up of variables before next loop or end of loop
